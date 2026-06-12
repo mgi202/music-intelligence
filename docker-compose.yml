@@ -26,7 +26,7 @@ services:
       - YTM_OAUTH_FILE=/config/oauth.json
     volumes:
       - mis-data:/data
-      - ./oauth.json:/config/oauth.json:ro
+      - ./oauth.json:/config/oauth.json
 
   worker:
     build: .
@@ -40,7 +40,7 @@ services:
       - WORKER_INTERVAL_MINUTES=360
     volumes:
       - mis-data:/data
-      - ./oauth.json:/config/oauth.json:ro
+      - ./oauth.json:/config/oauth.json
 
 volumes:
   mis-data:
