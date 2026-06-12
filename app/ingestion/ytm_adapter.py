@@ -31,6 +31,8 @@ from app.ingestion.normalise import normalise_token
 load_dotenv()
 
 _OAUTH_FILE = os.getenv("YTM_OAUTH_FILE", "oauth.json")
+_YTM_CLIENT_ID = os.getenv("YTM_CLIENT_ID", "")
+_YTM_CLIENT_SECRET = os.getenv("YTM_CLIENT_SECRET", "")
 _WRITE_BATCH_SIZE = 25     # YTM add_playlist_items batch size
 _WRITE_DELAY_S = 0.5       # Seconds between write batches
 
@@ -51,10 +53,16 @@ class YouTubeMusicAdapter(StreamingPlatformAdapter):
     def client(self):
         if self._client is None:
             try:
-                from ytmusicapi import YTMusic
+                from ytmusicapi import YTMusic, OAuthCredentials
             except ImportError:
-                raise ImportError("ytmusicapi is not installed. Run: pip install ytmusicapi==1.8.2")
-            self._client = YTMusic(self._oauth_file)
+                raise ImportError("ytmusicapi is not installed. Run: pip install ytmusicapi==1.12.1")
+            self._client = YTMusic(
+                self._oauth_file,
+                oauth_credentials=OAuthCredentials(
+                    client_id=_YTM_CLIENT_ID,
+                    client_secret=_YTM_CLIENT_SECRET,
+                ),
+            )
         return self._client
 
     # ── Library fetch ─────────────────────────────────────────────────────────
