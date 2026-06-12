@@ -2,7 +2,7 @@
 # All versions pinned. Run: pip install -r requirements.txt
 
 # YouTube Music
-ytmusicapi==1.8.2
+ytmusicapi==1.12.1
 
 # Metadata enrichment
 musicbrainzngs==0.7.1
@@ -13,7 +13,7 @@ rapidfuzz==3.9.7
 python-dotenv==1.0.1
 
 # Discogs (unofficial client wraps the REST API)
-discogs-client==2.7.0
+discogs-client==2.3.0
 
 # Utilities
 click==8.1.7          # CLI scripts
