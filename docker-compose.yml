@@ -1,0 +1,46 @@
+# Music Intelligence System — cloud VPS deployment (see DEPLOY.md)
+#
+# Usage:
+#   1. cp .env.example .env  and fill in API keys
+#   2. Generate oauth.json locally (setup_ytm_oauth.py), copy it next to this file
+#   3. docker compose up -d --build
+#   4. tailscale serve --bg http://localhost:8080
+#
+# The API binds to localhost only — it is reachable exclusively through
+# Tailscale (HTTPS, tailnet-only). Never expose port 8080 publicly: no auth.
+#
+# Services:
+#   api    — FastAPI backend + web frontend
+#   worker — ingest → enrich → playlist sync loop (default every 6h)
+
+services:
+  api:
+    build: .
+    container_name: mis-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    env_file: .env
+    environment:
+      - SQLITE_PATH=/data/library.db
+      - YTM_OAUTH_FILE=/config/oauth.json
+    volumes:
+      - mis-data:/data
+      - ./oauth.json:/config/oauth.json:ro
+
+  worker:
+    build: .
+    container_name: mis-worker
+    restart: unless-stopped
+    command: ["python", "scripts/run_worker.py"]
+    env_file: .env
+    environment:
+      - SQLITE_PATH=/data/library.db
+      - YTM_OAUTH_FILE=/config/oauth.json
+      - WORKER_INTERVAL_MINUTES=360
+    volumes:
+      - mis-data:/data
+      - ./oauth.json:/config/oauth.json:ro
+
+volumes:
+  mis-data:

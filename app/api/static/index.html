@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d11">
+<title>Music Intelligence</title>
+<style>
+  :root {
+    --bg: #0d0d11; --panel: #16161d; --panel2: #1e1e28;
+    --text: #e8e8ee; --dim: #8a8a99; --accent: #c8ff00;
+    --accent-dim: #87ab00; --danger: #ff5470; --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, "Segoe UI", Roboto, sans-serif; padding-bottom: 140px; }
+
+  header { position: sticky; top: 0; z-index: 20; background: rgba(13,13,17,.96); backdrop-filter: blur(8px); padding: 12px 14px 8px; border-bottom: 1px solid #23232e; }
+  header h1 { font-size: 15px; letter-spacing: 2px; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
+  header h1 span { color: var(--dim); font-weight: 400; }
+  .searchrow { display: flex; gap: 8px; }
+  .searchrow input { flex: 1; background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 9px 12px; border-radius: var(--radius); font-size: 15px; outline: none; }
+  .searchrow input:focus { border-color: var(--accent-dim); }
+
+  .chips { display: flex; gap: 6px; overflow-x: auto; padding: 8px 0 2px; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { flex-shrink: 0; background: var(--panel2); border: 1px solid #2b2b38; color: var(--dim); padding: 5px 12px; border-radius: 999px; font-size: 12.5px; cursor: pointer; user-select: none; }
+  .chip.active { background: var(--accent); color: #111; border-color: var(--accent); font-weight: 600; }
+
+  nav.tabs { display: flex; gap: 4px; margin-top: 8px; }
+  nav.tabs button { flex: 1; background: none; border: none; color: var(--dim); padding: 8px; font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent; }
+  nav.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+
+  main { padding: 10px 14px; }
+  .stats { font-size: 12px; color: var(--dim); padding: 4px 0 10px; }
+
+  .track { background: var(--panel); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 8px; }
+  .track .row1 { display: flex; align-items: center; gap: 10px; }
+  .track .meta { flex: 1; min-width: 0; cursor: pointer; }
+  .track .title { font-size: 14.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track .artist { font-size: 12.5px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .playbtn { width: 38px; height: 38px; flex-shrink: 0; border-radius: 50%; border: 1px solid #2b2b38; background: var(--panel2); color: var(--accent); font-size: 15px; cursor: pointer; }
+  .playbtn:disabled { opacity: .25; }
+
+  .stars { display: flex; gap: 2px; flex-shrink: 0; }
+  .stars button { background: none; border: none; font-size: 19px; color: #3a3a48; cursor: pointer; padding: 2px; line-height: 1; }
+  .stars button.lit { color: var(--accent); }
+
+  .tagrow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+  .tagrow .tag { font-size: 10.5px; padding: 2px 8px; border-radius: 999px; background: var(--panel2); color: var(--dim); }
+  .tagrow .tag.manual { background: #2a2a14; color: var(--accent); }
+  .tagrow .addtag { font-size: 10.5px; padding: 2px 8px; border-radius: 999px; background: none; border: 1px dashed #3a3a48; color: var(--dim); cursor: pointer; }
+
+  .loadmore { width: 100%; padding: 12px; background: var(--panel); border: 1px solid #2b2b38; color: var(--dim); border-radius: var(--radius); cursor: pointer; margin: 6px 0 20px; }
+  .empty { text-align: center; color: var(--dim); padding: 40px 0; font-size: 14px; }
+
+  /* Playlists */
+  .pl { background: var(--panel); border-radius: var(--radius); padding: 12px; margin-bottom: 10px; }
+  .pl .name { font-weight: 600; font-size: 15px; }
+  .pl .sub { font-size: 12px; color: var(--dim); margin: 3px 0 8px; }
+  .pl .actions { display: flex; gap: 8px; }
+  .pl .actions button { background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 6px 12px; border-radius: 8px; font-size: 12.5px; cursor: pointer; }
+  .pl .actions button.primary { background: var(--accent); color: #111; border-color: var(--accent); font-weight: 600; }
+  .pl .actions button.danger { color: var(--danger); }
+  .newpl { width: 100%; padding: 12px; border: 1px dashed #3a3a48; background: none; color: var(--dim); border-radius: var(--radius); cursor: pointer; font-size: 14px; margin-bottom: 10px; }
+
+  /* Player bar (desktop embed) */
+  #playerbar { position: fixed; bottom: 0; left: 0; right: 0; background: var(--panel); border-top: 1px solid #23232e; padding: 8px 14px; display: none; z-index: 30; }
+  #playerbar.visible { display: block; }
+  #playerbar .nowplaying { font-size: 12px; color: var(--dim); margin-bottom: 6px; display: flex; justify-content: space-between; }
+  #playerbar .nowplaying b { color: var(--text); }
+  #playerbar .closebtn { background: none; border: none; color: var(--dim); cursor: pointer; font-size: 14px; }
+  #ytplayer { width: 100%; height: 80px; border: none; border-radius: 8px; }
+
+  /* Modal */
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 40; display: flex; align-items: flex-end; justify-content: center; }
+  @media (min-width: 700px) { .modal-bg { align-items: center; } }
+  .modal { background: var(--panel); border-radius: 14px 14px 0 0; width: 100%; max-width: 560px; max-height: 85vh; overflow-y: auto; padding: 18px; }
+  @media (min-width: 700px) { .modal { border-radius: 14px; } }
+  .modal h2 { font-size: 16px; margin-bottom: 14px; }
+  .modal label { display: block; font-size: 12px; color: var(--dim); margin: 12px 0 4px; }
+  .modal input, .modal select { width: 100%; background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 9px 12px; border-radius: 8px; font-size: 14px; outline: none; }
+  .modal .btnrow { display: flex; gap: 8px; margin-top: 18px; }
+  .modal .btnrow button { flex: 1; padding: 11px; border-radius: 8px; border: 1px solid #2b2b38; background: var(--panel2); color: var(--text); font-size: 14px; cursor: pointer; }
+  .modal .btnrow button.primary { background: var(--accent); color: #111; border-color: var(--accent); font-weight: 600; }
+  .hint { font-size: 11px; color: var(--dim); margin-top: 3px; }
+
+  .toast { position: fixed; bottom: 110px; left: 50%; transform: translateX(-50%); background: var(--accent); color: #111; padding: 9px 18px; border-radius: 999px; font-size: 13px; font-weight: 600; z-index: 50; opacity: 0; transition: opacity .25s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Music Intelligence <span id="trackcount"></span></h1>
+  <div class="searchrow">
+    <input id="search" type="search" placeholder="Search title, artist, album…" autocomplete="off">
+  </div>
+  <div class="chips" id="ratingchips">
+    <div class="chip" data-rating="">All</div>
+    <div class="chip" data-rating="4">★★★★ Perfect</div>
+    <div class="chip" data-rating="3">★★★ Love</div>
+    <div class="chip" data-rating="2">★★ Really like</div>
+    <div class="chip" data-rating="1">★ Like</div>
+    <div class="chip" data-rating="0">Unrated</div>
+  </div>
+  <div class="chips" id="tagchips"></div>
+  <nav class="tabs">
+    <button id="tab-library" class="active">Library</button>
+    <button id="tab-playlists">Playlists</button>
+  </nav>
+</header>
+
+<main>
+  <div class="stats" id="stats"></div>
+  <div id="library"></div>
+  <div id="playlists" style="display:none"></div>
+</main>
+
+<div id="playerbar">
+  <div class="nowplaying">
+    <span id="np"></span>
+    <span>
+      <a id="np-ytm" href="#" target="_blank" style="color:var(--accent);font-size:12px;text-decoration:none;margin-right:12px">Open in YTM ↗</a>
+      <button class="closebtn" onclick="closePlayer()">✕</button>
+    </span>
+  </div>
+  <iframe id="ytplayer" allow="autoplay; encrypted-media"></iframe>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const state = {
+  q: "", rating: "", tag: "", offset: 0, limit: 100, total: 0,
+  tracks: [], view: "library",
+  isMobile: /Android|iPhone|iPad/i.test(navigator.userAgent),
+};
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => (s || "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 1600);
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts ? { headers: {"Content-Type":"application/json"}, ...opts } : undefined);
+  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || r.statusText); }
+  return r.json();
+}
+
+// ── Library ──────────────────────────────
+
+async function loadTracks(append = false) {
+  if (!append) state.offset = 0;
+  const p = new URLSearchParams({ limit: state.limit, offset: state.offset, sort: "added_desc" });
+  if (state.q) p.set("q", state.q);
+  if (state.rating !== "") p.set("rating", state.rating);
+  if (state.tag) p.set("tag", state.tag);
+  const data = await api(`/api/tracks?${p}`);
+  state.total = data.total;
+  state.tracks = append ? state.tracks.concat(data.tracks) : data.tracks;
+  renderLibrary();
+}
+
+function starButtons(t) {
+  const r = t.personal_rating || 0;
+  let html = '<div class="stars">';
+  for (let i = 1; i <= 4; i++) {
+    html += `<button class="${i <= r ? "lit" : ""}" onclick="rate('${t.track_pk}', ${i})">★</button>`;
+  }
+  return html + "</div>";
+}
+
+function renderLibrary() {
+  $("trackcount").textContent = state.total ? `· ${state.total}` : "";
+  const el = $("library");
+  if (!state.tracks.length) { el.innerHTML = '<div class="empty">No tracks match.</div>'; return; }
+  el.innerHTML = state.tracks.map(t => `
+    <div class="track" id="tr-${t.track_pk}">
+      <div class="row1">
+        <button class="playbtn" ${t.ytm_track_id ? "" : "disabled"} onclick="play('${t.ytm_track_id}', '${esc(t.canonical_artist)} — ${esc(t.canonical_title)}')">▶</button>
+        <div class="meta" onclick="this.parentElement.parentElement.querySelector('.tagrow').classList.toggle('open')">
+          <div class="title">${esc(t.canonical_title)}</div>
+          <div class="artist">${esc(t.canonical_artist)}${t.album_title ? " · " + esc(t.album_title) : ""}</div>
+        </div>
+        ${starButtons(t)}
+      </div>
+      <div class="tagrow">
+        ${t.tags.map(g => `<span class="tag ${g.tag_type === "private_manual" ? "manual" : ""}"
+            ${g.tag_type === "private_manual" ? `onclick="removeTag('${t.track_pk}','${esc(g.tag)}')" title="tap to remove"` : ""}>${esc(g.tag)}</span>`).join("")}
+        <button class="addtag" onclick="addTag('${t.track_pk}')">+ tag</button>
+      </div>
+    </div>`).join("")
+    + (state.tracks.length < state.total
+        ? `<button class="loadmore" onclick="more()">Load more (${state.total - state.tracks.length} remaining)</button>` : "");
+}
+
+function more() { state.offset += state.limit; loadTracks(true); }
+
+async function rate(pk, rating) {
+  const t = state.tracks.find(x => x.track_pk === pk);
+  const newRating = (t.personal_rating === rating) ? null : rating;  // tap same star = clear
+  await api(`/api/tracks/${pk}/rating`, { method: "PUT", body: JSON.stringify({ rating: newRating }) });
+  t.personal_rating = newRating;
+  renderLibrary();
+  toast(newRating ? ["", "Like", "Really like", "Love", "Perfect ✦"][newRating] : "Rating cleared");
+}
+
+async function addTag(pk) {
+  const tag = prompt("Tag (e.g. gym-energy, dub-techno):");
+  if (!tag) return;
+  await api(`/api/tracks/${pk}/tags`, { method: "POST", body: JSON.stringify({ tag }) });
+  await loadTracks(); loadTagChips();
+  toast(`Tagged: ${tag.toLowerCase().trim()}`);
+}
+
+async function removeTag(pk, tag) {
+  if (!confirm(`Remove tag "${tag}"?`)) return;
+  await api(`/api/tracks/${pk}/tags/${encodeURIComponent(tag)}`, { method: "DELETE" });
+  await loadTracks(); loadTagChips();
+}
+
+// ── Playback ─────────────────────────────
+// Phone:   deep-link opens the YouTube Music app (audio engine).
+// Desktop: official YouTube embed in the player bar.
+
+function play(videoId, label) {
+  if (!videoId) return;
+  if (state.isMobile) {
+    window.location.href = `https://music.youtube.com/watch?v=${videoId}`;
+  } else {
+    $("np").innerHTML = `<b>${esc(label)}</b>`;
+    $("np-ytm").href = `https://music.youtube.com/watch?v=${videoId}`;
+    $("ytplayer").src = `https://www.youtube.com/embed/${videoId}?autoplay=1`;
+    $("playerbar").classList.add("visible");
+  }
+}
+
+function closePlayer() {
+  $("ytplayer").src = "";
+  $("playerbar").classList.remove("visible");
+}
+
+// ── Playlists ────────────────────────────
+
+async function loadPlaylists() {
+  const rules = await api("/api/playlists");
+  $("playlists").innerHTML =
+    `<button class="newpl" onclick="editRule(null)">+ New playlist rule</button>` +
+    (rules.length ? rules.map(r => {
+      const e = r.rule_json.eligibility || {};
+      const desc = [
+        e.tags_any?.length ? "any of: " + e.tags_any.join(", ") : "",
+        e.tags_all?.length ? "all of: " + e.tags_all.join(", ") : "",
+        e.tags_none?.length ? "none of: " + e.tags_none.join(", ") : "",
+      ].filter(Boolean).join(" · ") || "all tracks";
+      return `
+      <div class="pl">
+        <div class="name">${esc(r.playlist_name)} ${r.enabled ? "" : "· <span style='color:var(--dim)'>disabled</span>"}</div>
+        <div class="sub">${r.ranking_mode} · ${desc}${r.max_tracks ? " · max " + r.max_tracks : ""}
+          ${r.last_synced_at ? "<br>last synced " + r.last_synced_at.slice(0, 16).replace("T", " ") : "<br>never synced"}</div>
+        <div class="actions">
+          <button onclick="previewRule('${r.rule_id}', '${esc(r.playlist_name)}')">Preview</button>
+          <button class="primary" onclick="syncRule('${r.rule_id}')">Sync to YTM</button>
+          <button onclick='editRule(${JSON.stringify(r).replace(/'/g, "&#39;")})'>Edit</button>
+          <button class="danger" onclick="deleteRule('${r.rule_id}')">Delete</button>
+        </div>
+      </div>`;
+    }).join("") : '<div class="empty">No playlist rules yet.</div>');
+}
+
+function editRule(rule) {
+  const e = rule?.rule_json?.eligibility || {};
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.onclick = (ev) => { if (ev.target === bg) bg.remove(); };
+  bg.innerHTML = `
+    <div class="modal">
+      <h2>${rule ? "Edit" : "New"} playlist rule</h2>
+      <label>Playlist name</label>
+      <input id="m-name" value="${esc(rule?.playlist_name || "")}" placeholder="Late Night Drive">
+      <label>Ranking mode</label>
+      <select id="m-mode">
+        ${["mood","dj_mix","discovery","utility"].map(m =>
+          `<option ${rule?.ranking_mode === m ? "selected" : ""}>${m}</option>`).join("")}
+      </select>
+      <label>Must have ANY of these tags</label>
+      <input id="m-any" value="${esc((e.tags_any || []).join(", "))}" placeholder="dub-techno, deep-techno">
+      <div class="hint">comma-separated</div>
+      <label>Must have ALL of these tags</label>
+      <input id="m-all" value="${esc((e.tags_all || []).join(", "))}">
+      <label>Must have NONE of these tags</label>
+      <input id="m-none" value="${esc((e.tags_none || []).join(", "))}">
+      <label>Minimum rating (optional)</label>
+      <select id="m-minrating">
+        <option value="">—</option>
+        ${[1,2,3,4].map(n => `<option value="${n}" ${rule?.rule_json?.eligibility?.min_rating === n ? "selected" : ""}>${"★".repeat(n)}+</option>`).join("")}
+      </select>
+      <label>Max tracks (optional)</label>
+      <input id="m-max" type="number" value="${rule?.max_tracks || ""}" placeholder="50">
+      <div class="btnrow">
+        <button onclick="this.closest('.modal-bg').remove()">Cancel</button>
+        <button class="primary" id="m-save">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bg);
+  $("m-save").onclick = async () => {
+    const split = (id) => $(id).value.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+    const eligibility = { tags_any: split("m-any"), tags_all: split("m-all"), tags_none: split("m-none") };
+    const minR = $("m-minrating").value;
+    if (minR) eligibility.min_rating = parseInt(minR);
+    const body = {
+      playlist_name: $("m-name").value.trim(),
+      ranking_mode: $("m-mode").value,
+      rule_json: { eligibility },
+      max_tracks: $("m-max").value ? parseInt($("m-max").value) : null,
+      enabled: true,
+    };
+    if (!body.playlist_name) return alert("Name required");
+    await api(rule ? `/api/playlists/${rule.rule_id}` : "/api/playlists",
+              { method: rule ? "PUT" : "POST", body: JSON.stringify(body) });
+    bg.remove(); loadPlaylists(); toast("Saved");
+  };
+}
+
+async function previewRule(ruleId, name) {
+  const data = await api(`/api/playlists/${ruleId}/preview`);
+  alert(`${name} — ${data.tracks.length} tracks\n\n` +
+    data.tracks.slice(0, 25).map((t, i) =>
+      `${i + 1}. ${t.canonical_artist} — ${t.canonical_title}${t.personal_rating ? " " + "★".repeat(t.personal_rating) : ""}`
+    ).join("\n") + (data.tracks.length > 25 ? `\n…and ${data.tracks.length - 25} more` : ""));
+}
+
+async function syncRule(ruleId) {
+  toast("Syncing…");
+  try { await api(`/api/playlists/${ruleId}/sync`, { method: "POST", body: "{}" }); toast("Synced to YTM ✓"); loadPlaylists(); }
+  catch (err) { alert("Sync failed: " + err.message); }
+}
+
+async function deleteRule(ruleId) {
+  if (!confirm("Delete this rule? (The YTM playlist itself is not deleted.)")) return;
+  await api(`/api/playlists/${ruleId}`, { method: "DELETE" });
+  loadPlaylists();
+}
+
+// ── Filters / tabs / boot ────────────────
+
+async function loadTagChips() {
+  const tags = await api("/api/tags");
+  const top = tags.slice(0, 14);
+  $("tagchips").innerHTML = top.map(t =>
+    `<div class="chip ${state.tag === t.tag ? "active" : ""}" data-tag="${esc(t.tag)}">${esc(t.tag)} <span style="opacity:.55">${t.n}</span></div>`
+  ).join("");
+  document.querySelectorAll("#tagchips .chip").forEach(c => c.onclick = () => {
+    state.tag = state.tag === c.dataset.tag ? "" : c.dataset.tag;
+    loadTagChips(); loadTracks();
+  });
+}
+
+async function loadStats() {
+  try {
+    const s = await api("/api/stats");
+    const r = s.ratings;
+    $("stats").textContent =
+      `${s.total_tracks} tracks · ${s.tracks_with_tags} tagged · ratings: ${r.perfect}✦ ${r.love}♥ ${r.really_like + r.like} liked, ${r.unrated} unrated`;
+  } catch (e) { /* fresh DB */ }
+}
+
+document.querySelectorAll("#ratingchips .chip").forEach(c => c.onclick = () => {
+  document.querySelectorAll("#ratingchips .chip").forEach(x => x.classList.remove("active"));
+  c.classList.add("active");
+  state.rating = c.dataset.rating;
+  loadTracks();
+});
+
+let searchTimer;
+$("search").addEventListener("input", (e) => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { state.q = e.target.value.trim(); loadTracks(); }, 300);
+});
+
+$("tab-library").onclick = () => switchView("library");
+$("tab-playlists").onclick = () => switchView("playlists");
+
+function switchView(v) {
+  state.view = v;
+  $("library").style.display = v === "library" ? "" : "none";
+  $("playlists").style.display = v === "playlists" ? "" : "none";
+  $("tab-library").classList.toggle("active", v === "library");
+  $("tab-playlists").classList.toggle("active", v === "playlists");
+  if (v === "playlists") loadPlaylists();
+}
+
+document.querySelector('#ratingchips .chip[data-rating=""]').classList.add("active");
+loadStats(); loadTracks(); loadTagChips();
+</script>
+</body>
+</html>
