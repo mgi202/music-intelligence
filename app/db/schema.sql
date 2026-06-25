@@ -454,3 +454,96 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_rule ON playlist_snapshots(rule_id, tak
 
 -- Audit log: index by creation time (prune + reporting)
 CREATE INDEX IF NOT EXISTS idx_processing_events_created ON processing_events(created_at);
+
+-- ─────────────────────────────────────────
+-- Tag curation (FE hardening, 2026-06-26)
+--
+-- Two independent layers sit between raw track_tags and everything the user
+-- sees / playlists rank on:
+--   tag_vocabulary      — GLOBAL hide-list + alias (spelling-variant merge)
+--   track_tag_overrides — PER-TRACK reject (suppress a wrong auto-tag on one
+--                         track only; survives re-enrichment because it is an
+--                         override, never a delete of the underlying row)
+-- Both are applied by the effective_track_tags view below, which is the single
+-- source of truth for tag reads (display, filter chips, playlist eligibility).
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS tag_vocabulary (
+    tag         TEXT PRIMARY KEY,          -- lower-cased canonical key
+    hidden      INTEGER NOT NULL DEFAULT 0,-- 1 = suppress everywhere
+    alias_to    TEXT,                      -- fold this tag into another (lower-cased)
+    updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS track_tag_overrides (
+    track_pk    TEXT NOT NULL,
+    tag         TEXT NOT NULL,             -- the EFFECTIVE tag (post-alias) the user rejected
+    action      TEXT NOT NULL CHECK (action IN ('reject')),
+    created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (track_pk, tag, action),
+    FOREIGN KEY (track_pk) REFERENCES tracks(track_pk) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_tag_overrides_track ON track_tag_overrides(track_pk);
+
+-- ─────────────────────────────────────────
+-- Source-playlist membership (FE hardening, 2026-06-26)
+--
+-- Which of the user's *own* YTM playlists each track currently lives in
+-- (Discover Weekly Archive, etc.). Captured at ingest from the playlist walk
+-- that previously discarded this mapping. Delete-replace per playlist on each
+-- ingest, so removals on YTM are reflected; a playlist that failed to fetch is
+-- left untouched (membership retained, not wiped).
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS track_playlist_membership (
+    track_pk        TEXT NOT NULL,
+    playlist_id     TEXT NOT NULL,
+    playlist_name   TEXT NOT NULL,
+    source          TEXT NOT NULL DEFAULT 'ytm' CHECK (source IN ('ytm','spotify')),
+    last_seen_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (track_pk, playlist_id, source),
+    FOREIGN KEY (track_pk) REFERENCES tracks(track_pk) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_tpm_playlist ON track_playlist_membership(playlist_id);
+CREATE INDEX IF NOT EXISTS idx_tpm_track    ON track_playlist_membership(track_pk);
+
+-- ─────────────────────────────────────────
+-- effective_track_tags — the canonical, user-facing tag set per track.
+-- Applies, in order: alias fold → global hide → per-track reject → dedup
+-- (collapsing the same tag arriving from multiple sources, which is what
+-- produced the "electronic electronic" duplicates). One row per
+-- (track_pk, effective tag), carrying the highest-trust tag_type seen.
+-- Recreated on every init so definition changes always take effect.
+-- ─────────────────────────────────────────
+DROP VIEW IF EXISTS effective_track_tags;
+CREATE VIEW effective_track_tags AS
+WITH mapped AS (
+    SELECT
+        tt.track_pk AS track_pk,
+        LOWER(COALESCE(NULLIF(v.alias_to, ''), tt.tag)) AS tag,
+        CASE tt.tag_type
+            WHEN 'private_manual'   THEN 0
+            WHEN 'private_model'    THEN 1
+            WHEN 'audio_inferred'   THEN 2
+            WHEN 'context_inferred' THEN 3
+            ELSE 4
+        END AS type_rank
+    FROM track_tags tt
+    LEFT JOIN tag_vocabulary v ON v.tag = LOWER(tt.tag)
+)
+SELECT
+    m.track_pk AS track_pk,
+    m.tag      AS tag,
+    CASE MIN(m.type_rank)
+        WHEN 0 THEN 'private_manual'
+        WHEN 1 THEN 'private_model'
+        WHEN 2 THEN 'audio_inferred'
+        WHEN 3 THEN 'context_inferred'
+        ELSE 'public'
+    END AS tag_type,
+    MIN(m.type_rank) AS type_rank
+FROM mapped m
+LEFT JOIN tag_vocabulary vh ON vh.tag = m.tag
+LEFT JOIN track_tag_overrides o
+       ON o.track_pk = m.track_pk AND o.tag = m.tag AND o.action = 'reject'
+WHERE COALESCE(vh.hidden, 0) = 0
+  AND o.track_pk IS NULL
+GROUP BY m.track_pk, m.tag;

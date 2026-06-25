@@ -209,12 +209,16 @@ def _fetch_eligible(
         conditions.append(f"t.match_status IN ({placeholders})")
         params.extend(status_any)
 
+    # Tag eligibility reads from effective_track_tags (not raw track_tags) so
+    # globally-hidden tags, per-track rejected tags, and spelling-variant
+    # aliases are honoured consistently with what the user sees in the UI.
+    #
     # tags_any: track must have at least one of these tags
     if tags_any:
         placeholders = ",".join("?" * len(tags_any))
         conditions.append(f"""
             EXISTS (
-                SELECT 1 FROM track_tags tt
+                SELECT 1 FROM effective_track_tags tt
                 WHERE tt.track_pk = t.track_pk
                   AND tt.tag IN ({placeholders})
             )
@@ -225,7 +229,7 @@ def _fetch_eligible(
     for tag in tags_all:
         conditions.append("""
             EXISTS (
-                SELECT 1 FROM track_tags tt
+                SELECT 1 FROM effective_track_tags tt
                 WHERE tt.track_pk = t.track_pk
                   AND tt.tag = ?
             )
@@ -237,7 +241,7 @@ def _fetch_eligible(
         placeholders = ",".join("?" * len(tags_none))
         conditions.append(f"""
             NOT EXISTS (
-                SELECT 1 FROM track_tags tt
+                SELECT 1 FROM effective_track_tags tt
                 WHERE tt.track_pk = t.track_pk
                   AND tt.tag IN ({placeholders})
             )

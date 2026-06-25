@@ -114,6 +114,31 @@
   .evidence .bar > span { display: block; height: 100%; background: var(--accent); }
   .health { font-size: 11.5px; color: var(--dim); margin-top: 6px; line-height: 1.5; }
   .health.held { color: var(--amber, #ffc14d); }
+
+  /* Filter bar: source-playlist select + AND/OR toggle */
+  .filterbar { display: flex; gap: 8px; align-items: center; padding: 6px 0 2px; }
+  .filterbar select { flex: 1; min-width: 0; background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 6px 10px; border-radius: 999px; font-size: 12.5px; outline: none; }
+  .modebtn { flex-shrink: 0; background: var(--panel2); border: 1px solid var(--accent-dim); color: var(--accent); padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 700; cursor: pointer; letter-spacing: 1px; }
+
+  /* Source-playlist chips on a track card */
+  .plrow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .plrow .plchip { font-size: 10px; padding: 2px 8px; border-radius: 6px; background: #14202a; color: #6fb6d6; border: 1px solid #1d3340; }
+
+  /* Auto-tag reject affordance: auto tags carry a faint × on the right */
+  .tagrow .tag.auto { cursor: pointer; }
+  .tagrow .tag.auto::after { content: " ×"; opacity: .4; }
+
+  /* Tag entry modal datalist input reuses .modal styles */
+
+  /* Tags admin screen */
+  .vocab { background: var(--panel); border-radius: var(--radius); padding: 8px 12px; margin-bottom: 6px; display: flex; align-items: center; gap: 10px; }
+  .vocab.hidden-tag { opacity: .5; }
+  .vocab .vname { flex: 1; min-width: 0; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vocab .vname .vn { color: var(--dim); font-size: 11px; }
+  .vocab .vname .alias { color: #6fb6d6; font-size: 11px; }
+  .vocab .vbtn { flex-shrink: 0; background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 5px 10px; border-radius: 8px; font-size: 12px; cursor: pointer; }
+  .vocab .vbtn.on { background: var(--danger); color: #111; border-color: var(--danger); font-weight: 600; }
+  .vocabsearch { width: 100%; background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 9px 12px; border-radius: var(--radius); font-size: 14px; outline: none; margin-bottom: 10px; }
 </style>
 </head>
 <body>
@@ -132,12 +157,17 @@
     <div class="chip" data-rating="0">Unrated</div>
   </div>
   <div class="chips" id="tagchips"></div>
+  <div class="filterbar" id="filterbar" style="display:none">
+    <select id="srcplaylist"><option value="">All playlists</option></select>
+    <button id="tagmode" class="modebtn" style="display:none">AND</button>
+  </div>
   <nav class="tabs">
     <button id="tab-home" class="active">Home</button>
     <button id="tab-library">Library</button>
     <button id="tab-inbox">Inbox <span id="inboxbadge" class="badge" style="display:none"></span></button>
     <button id="tab-playlists">Playlists</button>
     <button id="tab-review">Review <span id="reviewbadge" class="badge" style="display:none"></span></button>
+    <button id="tab-tags">Tags</button>
   </nav>
 </header>
 
@@ -152,6 +182,7 @@
   <div id="inbox" style="display:none"></div>
   <div id="playlists" style="display:none"></div>
   <div id="review" style="display:none"></div>
+  <div id="tags" style="display:none"></div>
 </main>
 
 <div id="playerbar">
@@ -169,8 +200,9 @@
 
 <script>
 const state = {
-  q: "", rating: "", tag: "", offset: 0, limit: 100, total: 0,
-  tracks: [], view: "library",
+  q: "", rating: "", tags: [], tagMode: "and", sourcePlaylist: "",
+  offset: 0, limit: 100, total: 0,
+  tracks: [], allTags: [], vocab: [], view: "library",
   isMobile: /Android|iPhone|iPad/i.test(navigator.userAgent),
 };
 
@@ -195,7 +227,8 @@ async function loadTracks(append = false) {
   const p = new URLSearchParams({ limit: state.limit, offset: state.offset, sort: "added_desc" });
   if (state.q) p.set("q", state.q);
   if (state.rating !== "") p.set("rating", state.rating);
-  if (state.tag) p.set("tag", state.tag);
+  if (state.tags.length) { p.set("tags", state.tags.join(",")); p.set("tag_mode", state.tagMode); }
+  if (state.sourcePlaylist) p.set("source_playlist", state.sourcePlaylist);
   const data = await api(`/api/tracks?${p}`);
   state.total = data.total;
   state.tracks = append ? state.tracks.concat(data.tracks) : data.tracks;
@@ -215,8 +248,15 @@ function trackCard(t, opts = {}) {
   const flags = [];
   if (t.blocked_from_playlists) flags.push('<span class="flag">⛔ blocked</span>');
   if (t.do_not_recommend) flags.push('<span class="flag">🚫 no rec</span>');
-  const tags = (t.tags || []).map(g => `<span class="tag ${g.tag_type === "private_manual" ? "manual" : ""}"
-      ${g.tag_type === "private_manual" ? `onclick="removeTag('${t.track_pk}','${esc(g.tag)}')" title="tap to remove"` : ""}>${esc(g.tag)}</span>`).join("");
+  const tags = (t.tags || []).map(g => {
+    const manual = g.tag_type === "private_manual";
+    const click = manual
+      ? `onclick="removeTag('${t.track_pk}','${esc(g.tag)}')" title="manual tag — tap to remove"`
+      : `onclick="rejectTag('${t.track_pk}','${esc(g.tag)}')" title="auto tag — tap to reject for this track"`;
+    return `<span class="tag ${manual ? "manual" : "auto"}" ${click}>${esc(g.tag)}</span>`;
+  }).join("");
+  const plchips = (t.playlists || []).map(p =>
+    `<span class="plchip" title="in this YTM playlist">${esc(p.playlist_name)}</span>`).join("");
   return `
     <div class="track" id="tr-${t.track_pk}">
       <div class="row1">
@@ -234,6 +274,7 @@ function trackCard(t, opts = {}) {
         <button class="addtag" onclick="addTag('${t.track_pk}')">+ tag</button>
         ${opts.dismiss ? `<button class="addtag" onclick="dismissTrack('${t.track_pk}')">✓ dismiss</button>` : ""}
       </div>
+      ${plchips ? `<div class="plrow">${plchips}</div>` : ""}
     </div>`;
 }
 
@@ -302,17 +343,48 @@ async function rate(pk, rating) {
 }
 
 async function addTag(pk) {
-  const tag = prompt("Tag (e.g. gym-energy, dub-techno):");
-  if (!tag) return;
-  await api(`/api/tracks/${pk}/tags`, { method: "POST", body: JSON.stringify({ tag }) });
-  await loadTracks(); loadTagChips();
-  toast(`Tagged: ${tag.toLowerCase().trim()}`);
+  if (!state.allTags.length) { try { state.allTags = await api("/api/tags"); } catch (e) {} }
+  const opts = state.allTags.map(t => `<option value="${esc(t.tag)}">`).join("");
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.onclick = (ev) => { if (ev.target === bg) bg.remove(); };
+  bg.innerHTML = `<div class="modal">
+    <h2>Add tag</h2>
+    <input id="tag-input" list="tag-suggest" placeholder="start typing… e.g. dub-techno" autocomplete="off" autocapitalize="none">
+    <datalist id="tag-suggest">${opts}</datalist>
+    <div class="hint">Pick an existing tag (autocompletes) or type a new one.</div>
+    <div class="btnrow">
+      <button onclick="this.closest('.modal-bg').remove()">Cancel</button>
+      <button class="primary" id="tag-save">Add</button>
+    </div>
+  </div>`;
+  document.body.appendChild(bg);
+  const input = bg.querySelector("#tag-input");
+  input.focus();
+  const submit = async () => {
+    const tag = input.value.trim();
+    if (!tag) return;
+    await api(`/api/tracks/${pk}/tags`, { method: "POST", body: JSON.stringify({ tag }) });
+    bg.remove();
+    await loadTracks(); loadTagChips();
+    toast(`Tagged: ${tag.toLowerCase()}`);
+  };
+  bg.querySelector("#tag-save").onclick = submit;
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
 }
 
 async function removeTag(pk, tag) {
-  if (!confirm(`Remove tag "${tag}"?`)) return;
+  if (!confirm(`Remove your manual tag "${tag}"?`)) return;
   await api(`/api/tracks/${pk}/tags/${encodeURIComponent(tag)}`, { method: "DELETE" });
   await loadTracks(); loadTagChips();
+}
+
+// Reject an auto-pulled tag for THIS track only. Survives re-enrichment.
+async function rejectTag(pk, tag) {
+  if (!confirm(`Reject "${tag}" on this track?\n\nIt won't show here or count toward playlists, and won't return on re-enrichment. To hide a tag across your whole library, use the Tags tab instead.`)) return;
+  await api(`/api/tracks/${pk}/tags/${encodeURIComponent(tag)}/reject`, { method: "POST", body: "{}" });
+  await loadTracks(); loadTagChips();
+  toast(`Rejected: ${tag}`);
 }
 
 // ── Playback ─────────────────────────────
@@ -511,14 +583,32 @@ async function deleteRule(ruleId) {
 
 async function loadTagChips() {
   const tags = await api("/api/tags");
-  const top = tags.slice(0, 14);
-  $("tagchips").innerHTML = top.map(t =>
-    `<div class="chip ${state.tag === t.tag ? "active" : ""}" data-tag="${esc(t.tag)}">${esc(t.tag)} <span style="opacity:.55">${t.n}</span></div>`
+  state.allTags = tags;
+  // Selected tags float to the front so an active multi-selection stays visible.
+  const sel = tags.filter(t => state.tags.includes(t.tag));
+  const rest = tags.filter(t => !state.tags.includes(t.tag)).slice(0, 16);
+  const show = sel.concat(rest);
+  $("tagchips").innerHTML = show.map(t =>
+    `<div class="chip ${state.tags.includes(t.tag) ? "active" : ""}" data-tag="${esc(t.tag)}">${esc(t.tag)} <span style="opacity:.55">${t.n}</span></div>`
   ).join("");
   document.querySelectorAll("#tagchips .chip").forEach(c => c.onclick = () => {
-    state.tag = state.tag === c.dataset.tag ? "" : c.dataset.tag;
+    const tg = c.dataset.tag;
+    const i = state.tags.indexOf(tg);
+    if (i >= 0) state.tags.splice(i, 1); else state.tags.push(tg);
     loadTagChips(); loadTracks();
   });
+  const tm = $("tagmode");
+  if (state.tags.length >= 2) { tm.style.display = ""; tm.textContent = state.tagMode.toUpperCase(); }
+  else tm.style.display = "none";
+}
+
+async function loadSourcePlaylists() {
+  let pls = [];
+  try { pls = await api("/api/source-playlists"); } catch (e) {}
+  const sel = $("srcplaylist");
+  sel.innerHTML = `<option value="">All playlists</option>` + pls.map(p =>
+    `<option value="${esc(p.playlist_id)}" ${state.sourcePlaylist === p.playlist_id ? "selected" : ""}>${esc(p.playlist_name)} (${p.n})</option>`
+  ).join("");
 }
 
 async function loadStats() {
@@ -627,14 +717,56 @@ async function dismissPair(id) {
   loadReview();
 }
 
+// ── Tags admin: global hide-list + alias ──
+function vocabRowsHtml(rows) {
+  return rows.length ? rows.map(v => `
+    <div class="vocab ${v.hidden ? "hidden-tag" : ""}">
+      <div class="vname">${esc(v.tag)} <span class="vn">${v.n}</span>${v.alias_to ? ` <span class="alias">→ ${esc(v.alias_to)}</span>` : ""}</div>
+      <button class="vbtn ${v.hidden ? "on" : ""}" onclick="toggleHide('${esc(v.tag)}', ${v.hidden ? 0 : 1})">${v.hidden ? "Hidden" : "Hide"}</button>
+      <button class="vbtn" onclick="aliasTag('${esc(v.tag)}')">${v.alias_to ? "Re-alias" : "Alias"}</button>
+    </div>`).join("") : '<div class="empty">No tags match.</div>';
+}
+
+async function loadTags() {
+  state.vocab = await api("/api/vocabulary");
+  $("tags").innerHTML =
+    `<div class="stats">${state.vocab.length} distinct tags · "Hide" removes a tag everywhere; "Alias" merges a spelling variant into another tag.</div>
+     <input class="vocabsearch" id="vocabsearch" placeholder="Filter tags…" autocomplete="off" autocapitalize="none">
+     <div id="vocablist">${vocabRowsHtml(state.vocab.slice(0, 250))}</div>`;
+  $("vocabsearch").oninput = (e) => {
+    const f = e.target.value.trim().toLowerCase();
+    const rows = (f ? state.vocab.filter(v => v.tag.includes(f)) : state.vocab).slice(0, 250);
+    $("vocablist").innerHTML = vocabRowsHtml(rows);
+  };
+}
+
+async function toggleHide(tag, hidden) {
+  await api(`/api/vocabulary/${encodeURIComponent(tag)}`, { method: "PUT", body: JSON.stringify({ hidden: !!hidden }) });
+  toast(hidden ? `Hidden: ${tag}` : `Shown: ${tag}`);
+  await loadTags(); loadTagChips();
+}
+
+async function aliasTag(tag) {
+  const target = prompt(`Merge "${tag}" into which tag?\nType an existing tag name, or leave blank to clear.`, "");
+  if (target === null) return;
+  await api(`/api/vocabulary/${encodeURIComponent(tag)}`, { method: "PUT", body: JSON.stringify({ alias_to: target.trim() || null }) });
+  toast(target.trim() ? `${tag} → ${target.trim().toLowerCase()}` : "Alias cleared");
+  await loadTags(); loadTagChips();
+}
+
 // ── Tabs ──
 $("tab-home").onclick = () => switchView("home");
 $("tab-library").onclick = () => switchView("library");
 $("tab-inbox").onclick = () => switchView("inbox");
 $("tab-playlists").onclick = () => switchView("playlists");
 $("tab-review").onclick = () => switchView("review");
+$("tab-tags").onclick = () => switchView("tags");
 
-const VIEWS = ["home", "library", "inbox", "playlists", "review"];
+// AND/OR toggle + source-playlist filter (bound once)
+$("tagmode").onclick = () => { state.tagMode = state.tagMode === "and" ? "or" : "and"; loadTagChips(); loadTracks(); };
+$("srcplaylist").onchange = (e) => { state.sourcePlaylist = e.target.value; loadTracks(); };
+
+const VIEWS = ["home", "library", "inbox", "playlists", "review", "tags"];
 function switchView(v) {
   state.view = v;
   VIEWS.forEach(name => {
@@ -643,11 +775,13 @@ function switchView(v) {
     if (tab) tab.classList.toggle("active", name === v);
   });
   $("stats").style.display = v === "library" ? "" : "none";
+  $("filterbar").style.display = v === "library" ? "" : "none";
   if (v === "home") { loadHome(); startHomePolling(); } else { stopHomePolling(); }
-  if (v === "library") loadTracks();
+  if (v === "library") { loadTracks(); loadSourcePlaylists(); }
   if (v === "inbox") loadInbox();
   if (v === "playlists") loadPlaylists();
   if (v === "review") loadReview();
+  if (v === "tags") loadTags();
 }
 
 document.querySelector('#ratingchips .chip[data-rating=""]').classList.add("active");

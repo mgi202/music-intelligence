@@ -250,3 +250,66 @@ def ingest_tokens(tokens: list[TrackToken], batch_size: int = 500) -> tuple[int,
                 updated_count += 1
 
     return new_count, updated_count
+
+
+def _resolve_pk_by_video_id(video_id: str, conn: sqlite3.Connection) -> str | None:
+    """Resolve a YTM videoId to a track_pk via the alias table, then the column."""
+    row = conn.execute(
+        "SELECT track_pk FROM track_aliases WHERE alias_key = ?",
+        (f"ytm:{video_id}",),
+    ).fetchone()
+    if row:
+        return row["track_pk"]
+    row = conn.execute(
+        "SELECT track_pk FROM tracks WHERE ytm_track_id = ?", (video_id,)
+    ).fetchone()
+    return row["track_pk"] if row else None
+
+
+def record_source_memberships(
+    memberships: dict[str, dict],
+    source: str = "ytm",
+    db_path: str | None = None,
+) -> int:
+    """Persist which of the user's own playlists each track currently lives in.
+
+    ``memberships`` is the adapter's ``last_playlist_memberships``:
+        {playlist_id: {"name": str, "video_ids": set[str]}}
+
+    Delete-replace per playlist so removals on the platform are reflected, while
+    a playlist absent from the map (e.g. it failed to fetch this run) is left
+    untouched. Tracks whose videoId has not yet resolved to a ledger row are
+    skipped — they will be picked up on a later ingest once they land.
+
+    Returns the number of membership rows written.
+    """
+    if not memberships:
+        return 0
+    now = datetime.now(timezone.utc).isoformat()
+    written = 0
+    with db_conn(db_path) as conn:
+        for playlist_id, info in memberships.items():
+            name = (info or {}).get("name") or playlist_id
+            video_ids = (info or {}).get("video_ids") or set()
+            pks: list[str] = []
+            for vid in video_ids:
+                pk = _resolve_pk_by_video_id(vid, conn)
+                if pk:
+                    pks.append(pk)
+            # Replace this playlist's membership atomically.
+            conn.execute(
+                "DELETE FROM track_playlist_membership WHERE playlist_id = ? AND source = ?",
+                (playlist_id, source),
+            )
+            for pk in set(pks):
+                conn.execute(
+                    """INSERT INTO track_playlist_membership
+                           (track_pk, playlist_id, playlist_name, source, last_seen_at)
+                       VALUES (?, ?, ?, ?, ?)
+                       ON CONFLICT(track_pk, playlist_id, source) DO UPDATE SET
+                           playlist_name = excluded.playlist_name,
+                           last_seen_at  = excluded.last_seen_at""",
+                    (pk, playlist_id, name, source, now),
+                )
+                written += 1
+    return written

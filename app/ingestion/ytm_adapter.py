@@ -54,6 +54,9 @@ class YouTubeMusicAdapter(StreamingPlatformAdapter):
     def __init__(self, oauth_file: str | None = None) -> None:
         self._oauth_file = oauth_file or _OAUTH_FILE
         self._client = None
+        # Populated by fetch_library_snapshot(): playlist_id -> {"name", "video_ids"}.
+        # Lets the worker record source-playlist membership without a second walk.
+        self.last_playlist_memberships: dict[str, dict] = {}
 
     @property
     def client(self):
@@ -94,6 +97,7 @@ class YouTubeMusicAdapter(StreamingPlatformAdapter):
         """
         tokens: list[TrackToken] = []
         seen_video_ids: set[str] = set()
+        self.last_playlist_memberships = {}
 
         def _absorb(raw_items: list[dict]) -> None:
             for item in raw_items or []:
@@ -132,7 +136,23 @@ class YouTubeMusicAdapter(StreamingPlatformAdapter):
                 continue
             try:
                 playlist = self.client.get_playlist(playlist_id, limit=10000)
-                _absorb((playlist or {}).get("tracks", []))
+                raw_tracks = (playlist or {}).get("tracks", [])
+                # Capture membership BEFORE _absorb's cross-surface dedup drops
+                # tracks already seen on the library/liked surfaces — a track in
+                # both library and Discover Weekly Archive must still be recorded
+                # as belonging to the playlist.
+                pl_name = (pl.get("title") or "").strip() or playlist_id
+                vids = {
+                    it.get("videoId")
+                    for it in raw_tracks
+                    if isinstance(it, dict) and it.get("videoId")
+                }
+                if vids:
+                    self.last_playlist_memberships[playlist_id] = {
+                        "name": pl_name,
+                        "video_ids": vids,
+                    }
+                _absorb(raw_tracks)
             except Exception as e:  # noqa: BLE001 — one playlist failing is non-fatal
                 print(f"Warning: get_playlist({playlist_id}) failed: {e}")
                 continue

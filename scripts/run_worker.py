@@ -63,13 +63,25 @@ def run_pass() -> None:
     # ── 1. Ingest from YTM + takedown marking ──
     try:
         from app.ingestion.ytm_adapter import YouTubeMusicAdapter
-        from app.ingestion.ledger import ingest_tokens
+        from app.ingestion.ledger import ingest_tokens, record_source_memberships
 
         adapter = YouTubeMusicAdapter()
         tokens = adapter.fetch_library_snapshot()
         inserted, updated = ingest_tokens(tokens)
         ingest_ok = True
         logger.info("Ingest: %d new, %d updated from YTM", inserted, updated)
+
+        # Source-playlist membership (must run AFTER ingest_tokens so videoIds
+        # have resolved to track_pks). Isolated: a failure here never blocks
+        # the rest of the ingest stage.
+        try:
+            m = record_source_memberships(adapter.last_playlist_memberships)
+            logger.info(
+                "Source-playlist membership: %d rows across %d playlists",
+                m, len(adapter.last_playlist_memberships),
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Source-playlist membership recording failed: %s", e)
 
         from app.ingestion import takedown
         takedown.record_full_scan(pass_start)

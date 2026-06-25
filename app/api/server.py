@@ -54,6 +54,11 @@ class FlagsRequest(BaseModel):
     do_not_recommend: Optional[bool] = None
 
 
+class VocabRequest(BaseModel):
+    hidden: Optional[bool] = False
+    alias_to: Optional[str] = None
+
+
 class PlaylistRuleRequest(BaseModel):
     playlist_name: str
     rule_json: dict
@@ -70,7 +75,10 @@ class PlaylistRuleRequest(BaseModel):
 @app.get("/api/tracks")
 def list_tracks(
     q: Optional[str] = Query(None, description="Search title/artist/album"),
-    tag: Optional[str] = Query(None),
+    tag: Optional[str] = Query(None, description="Single tag (legacy)"),
+    tags: Optional[str] = Query(None, description="Comma-separated tags (multi-select)"),
+    tag_mode: str = Query("and", pattern="^(and|or)$", description="Combine multiple tags"),
+    source_playlist: Optional[str] = Query(None, description="Filter to a YTM source playlist_id"),
     rating: Optional[int] = Query(None, ge=0, le=4, description="0 = unrated"),
     status: Optional[str] = Query(None),
     sort: str = Query("added_desc", pattern="^(added_desc|added_asc|artist|title|rating_desc)$"),
@@ -88,11 +96,36 @@ def list_tracks(
         )
         params.extend([like, like, like])
 
-    if tag:
+    # Tag filter — single (?tag=) or multi (?tags=a,b&tag_mode=and|or), evaluated
+    # against effective_track_tags so hidden/rejected/aliased tags behave exactly
+    # as the user sees them.
+    tag_list: list[str] = []
+    if tags:
+        tag_list = [s.strip().lower() for s in tags.split(",") if s.strip()]
+    elif tag:
+        tag_list = [tag.strip().lower()]
+    if tag_list:
+        if tag_mode == "or":
+            placeholders = ",".join("?" * len(tag_list))
+            conditions.append(
+                f"EXISTS (SELECT 1 FROM effective_track_tags tt "
+                f"WHERE tt.track_pk = t.track_pk AND tt.tag IN ({placeholders}))"
+            )
+            params.extend(tag_list)
+        else:  # and — track must carry every selected tag
+            for tg in tag_list:
+                conditions.append(
+                    "EXISTS (SELECT 1 FROM effective_track_tags tt "
+                    "WHERE tt.track_pk = t.track_pk AND tt.tag = ?)"
+                )
+                params.append(tg)
+
+    if source_playlist:
         conditions.append(
-            "EXISTS (SELECT 1 FROM track_tags tt WHERE tt.track_pk = t.track_pk AND tt.tag = ?)"
+            "EXISTS (SELECT 1 FROM track_playlist_membership m "
+            "WHERE m.track_pk = t.track_pk AND m.playlist_id = ?)"
         )
-        params.append(tag.lower().strip())
+        params.append(source_playlist)
 
     if rating is not None:
         if rating == 0:
@@ -133,22 +166,35 @@ def list_tracks(
         tracks = [dict(r) for r in rows]
         pks = [t["track_pk"] for t in tracks]
         tags_by_track: dict[str, list] = {pk: [] for pk in pks}
+        memberships_by_track: dict[str, list] = {pk: [] for pk in pks}
         if pks:
             placeholders = ",".join("?" * len(pks))
+            # Effective tags: deduped, alias-folded, hidden + per-track-rejected
+            # already removed by the view.
             for row in conn.execute(
-                f"""SELECT track_pk, tag, tag_type FROM track_tags
+                f"""SELECT track_pk, tag, tag_type FROM effective_track_tags
                     WHERE track_pk IN ({placeholders})
-                    ORDER BY CASE tag_type
-                        WHEN 'private_manual' THEN 0 WHEN 'private_model' THEN 1
-                        WHEN 'audio_inferred' THEN 2 WHEN 'context_inferred' THEN 3
-                        ELSE 4 END, tag""",
+                    ORDER BY type_rank, tag""",
                 pks,
             ):
                 tags_by_track[row["track_pk"]].append(
                     {"tag": row["tag"], "tag_type": row["tag_type"]}
                 )
+            # Source-playlist membership (which of the user's own YTM playlists
+            # the track currently lives in).
+            for row in conn.execute(
+                f"""SELECT track_pk, playlist_id, playlist_name
+                    FROM track_playlist_membership
+                    WHERE track_pk IN ({placeholders})
+                    ORDER BY playlist_name COLLATE NOCASE""",
+                pks,
+            ):
+                memberships_by_track[row["track_pk"]].append(
+                    {"playlist_id": row["playlist_id"], "playlist_name": row["playlist_name"]}
+                )
         for t in tracks:
             t["tags"] = tags_by_track[t["track_pk"]]
+            t["playlists"] = memberships_by_track[t["track_pk"]]
 
         return {"total": total, "limit": limit, "offset": offset, "tracks": tracks}
     finally:
@@ -211,13 +257,136 @@ def delete_tag(track_pk: str, tag: str):
 
 @app.get("/api/tags")
 def list_all_tags():
-    """All distinct tags with usage counts, grouped by type. Powers filter UI."""
+    """Distinct EFFECTIVE tags with track counts. Powers filter chips and the
+    autocomplete — hidden/aliased tags are already collapsed out by the view."""
     conn = get_connection()
     try:
         rows = conn.execute(
-            """SELECT tag, tag_type, COUNT(*) AS n
-               FROM track_tags GROUP BY tag, tag_type
+            """SELECT tag,
+                      COUNT(DISTINCT track_pk) AS n,
+                      CASE MIN(type_rank)
+                          WHEN 0 THEN 'private_manual'
+                          WHEN 1 THEN 'private_model'
+                          WHEN 2 THEN 'audio_inferred'
+                          WHEN 3 THEN 'context_inferred'
+                          ELSE 'public' END AS tag_type
+               FROM effective_track_tags
+               GROUP BY tag
                ORDER BY n DESC, tag"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ─────────────────────────────────────────
+# Tag vocabulary (global hide-list + alias) — the admin "Tags" screen
+# ─────────────────────────────────────────
+
+@app.get("/api/vocabulary")
+def list_vocabulary():
+    """Every distinct raw tag in the library with its curation state. Hidden tags
+    are still listed here (so they can be un-hidden) — unlike /api/tags."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT LOWER(tt.tag) AS tag,
+                      COUNT(DISTINCT tt.track_pk) AS n,
+                      COALESCE(v.hidden, 0) AS hidden,
+                      v.alias_to AS alias_to
+               FROM track_tags tt
+               LEFT JOIN tag_vocabulary v ON v.tag = LOWER(tt.tag)
+               GROUP BY LOWER(tt.tag)
+               ORDER BY n DESC, tag"""
+        ).fetchall()
+        return [
+            {"tag": r["tag"], "n": r["n"], "hidden": bool(r["hidden"]), "alias_to": r["alias_to"]}
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+@app.put("/api/vocabulary/{tag}")
+def set_vocabulary(tag: str, body: VocabRequest):
+    """Hide a tag globally, or alias it into another. hidden and alias_to are
+    mutually exclusive — setting one clears the other."""
+    tag = tag.lower().strip()
+    if not tag:
+        raise HTTPException(400, "Empty tag")
+    alias_to = (body.alias_to or "").lower().strip() or None
+    if alias_to == tag:
+        raise HTTPException(400, "A tag cannot alias to itself")
+    hidden = 1 if body.hidden else 0
+    if alias_to:
+        hidden = 0  # aliasing supersedes hiding
+    now = datetime.now(timezone.utc).isoformat()
+    with db_conn() as conn:
+        conn.execute(
+            """INSERT INTO tag_vocabulary (tag, hidden, alias_to, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(tag) DO UPDATE SET
+                   hidden = excluded.hidden,
+                   alias_to = excluded.alias_to,
+                   updated_at = excluded.updated_at""",
+            (tag, hidden, alias_to, now),
+        )
+    return {"tag": tag, "hidden": bool(hidden), "alias_to": alias_to}
+
+
+# ─────────────────────────────────────────
+# Per-track auto-tag rejection (survives re-enrichment via override row)
+# ─────────────────────────────────────────
+
+@app.post("/api/tracks/{track_pk}/tags/{tag}/reject")
+def reject_tag(track_pk: str, tag: str):
+    """Suppress a wrong auto-tag on THIS track only. The underlying track_tags
+    row is left intact; the override hides it from display, filtering, and
+    playlist eligibility, and persists across re-enrichment."""
+    tag = tag.lower().strip()
+    if not tag:
+        raise HTTPException(400, "Empty tag")
+    with db_conn() as conn:
+        if not conn.execute(
+            "SELECT 1 FROM tracks WHERE track_pk = ?", (track_pk,)
+        ).fetchone():
+            raise HTTPException(404, "Track not found")
+        conn.execute(
+            """INSERT OR IGNORE INTO track_tag_overrides (track_pk, tag, action)
+               VALUES (?, ?, 'reject')""",
+            (track_pk, tag),
+        )
+    return {"rejected": True, "track_pk": track_pk, "tag": tag}
+
+
+@app.delete("/api/tracks/{track_pk}/tags/{tag}/reject")
+def unreject_tag(track_pk: str, tag: str):
+    """Undo a per-track reject (tag reappears if still present from a source)."""
+    tag = tag.lower().strip()
+    with db_conn() as conn:
+        result = conn.execute(
+            "DELETE FROM track_tag_overrides WHERE track_pk = ? AND tag = ? AND action = 'reject'",
+            (track_pk, tag),
+        )
+        if result.rowcount == 0:
+            raise HTTPException(404, "No reject override for that tag on this track")
+    return {"unrejected": True}
+
+
+# ─────────────────────────────────────────
+# Source playlists (the user's own YTM playlists, e.g. Discover Weekly Archive)
+# ─────────────────────────────────────────
+
+@app.get("/api/source-playlists")
+def list_source_playlists():
+    """Distinct source playlists with track counts. Powers the Library filter."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT playlist_id, playlist_name, source, COUNT(*) AS n
+               FROM track_playlist_membership
+               GROUP BY playlist_id, source
+               ORDER BY n DESC, playlist_name COLLATE NOCASE"""
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
