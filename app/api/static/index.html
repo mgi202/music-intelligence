@@ -86,6 +86,34 @@
 
   .toast { position: fixed; bottom: 110px; left: 50%; transform: translateX(-50%); background: var(--accent); color: #111; padding: 9px 18px; border-radius: 999px; font-size: 13px; font-weight: 600; z-index: 50; opacity: 0; transition: opacity .25s; pointer-events: none; }
   .toast.show { opacity: 1; }
+
+  /* Badges + section labels */
+  .badge { display: inline-block; min-width: 16px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: #111; font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
+  .sectionlbl { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); margin: 14px 0 8px; }
+
+  /* Now-playing card */
+  .npcard { background: linear-gradient(135deg, #1a1a24, #15151c); border: 1px solid #2b2b38; border-left: 3px solid var(--accent); border-radius: var(--radius); padding: 14px; margin-bottom: 12px; }
+  .npcard .lbl { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--accent); }
+  .npcard .t { font-size: 16px; font-weight: 600; margin-top: 4px; }
+  .npcard .a { font-size: 13px; color: var(--dim); }
+  .npcard .unmatched { font-size: 11px; color: var(--dim); margin-top: 6px; font-style: italic; }
+
+  /* ⋯ menu */
+  .track .more { width: 30px; height: 30px; flex-shrink: 0; border-radius: 8px; border: 1px solid #2b2b38; background: var(--panel2); color: var(--dim); font-size: 16px; cursor: pointer; line-height: 1; }
+  .track .flagrow { display: flex; gap: 6px; margin-top: 6px; }
+  .track .flag { font-size: 10px; padding: 2px 7px; border-radius: 999px; background: #2a1414; color: var(--danger); }
+  .menu { position: fixed; inset: 0; z-index: 45; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; }
+  .menu .sheet { background: var(--panel); width: 100%; border-radius: 14px 14px 0 0; padding: 8px; }
+  .menu .sheet button { display: block; width: 100%; text-align: left; background: none; border: none; color: var(--text); padding: 13px 14px; font-size: 14px; cursor: pointer; border-radius: 8px; }
+  .menu .sheet button:hover { background: var(--panel2); }
+  .menu .sheet button.danger { color: var(--danger); }
+
+  /* Evidence + health */
+  .evidence { background: var(--panel2); border-radius: 8px; padding: 10px; margin-top: 8px; font-size: 12px; }
+  .evidence .bar { height: 6px; background: #2b2b38; border-radius: 3px; overflow: hidden; margin: 3px 0 7px; }
+  .evidence .bar > span { display: block; height: 100%; background: var(--accent); }
+  .health { font-size: 11.5px; color: var(--dim); margin-top: 6px; line-height: 1.5; }
+  .health.held { color: var(--amber, #ffc14d); }
 </style>
 </head>
 <body>
@@ -105,15 +133,25 @@
   </div>
   <div class="chips" id="tagchips"></div>
   <nav class="tabs">
-    <button id="tab-library" class="active">Library</button>
+    <button id="tab-home" class="active">Home</button>
+    <button id="tab-library">Library</button>
+    <button id="tab-inbox">Inbox <span id="inboxbadge" class="badge" style="display:none"></span></button>
     <button id="tab-playlists">Playlists</button>
+    <button id="tab-review">Review <span id="reviewbadge" class="badge" style="display:none"></span></button>
   </nav>
 </header>
 
 <main>
-  <div class="stats" id="stats"></div>
-  <div id="library"></div>
+  <div id="home">
+    <div id="npcard"></div>
+    <div class="sectionlbl" id="recentlbl" style="display:none">Recent listens</div>
+    <div id="recent"></div>
+  </div>
+  <div class="stats" id="stats" style="display:none"></div>
+  <div id="library" style="display:none"></div>
+  <div id="inbox" style="display:none"></div>
   <div id="playlists" style="display:none"></div>
+  <div id="review" style="display:none"></div>
 </main>
 
 <div id="playerbar">
@@ -173,39 +211,94 @@ function starButtons(t) {
   return html + "</div>";
 }
 
-function renderLibrary() {
-  $("trackcount").textContent = state.total ? `· ${state.total}` : "";
-  const el = $("library");
-  if (!state.tracks.length) { el.innerHTML = '<div class="empty">No tracks match.</div>'; return; }
-  el.innerHTML = state.tracks.map(t => `
+function trackCard(t, opts = {}) {
+  const flags = [];
+  if (t.blocked_from_playlists) flags.push('<span class="flag">⛔ blocked</span>');
+  if (t.do_not_recommend) flags.push('<span class="flag">🚫 no rec</span>');
+  const tags = (t.tags || []).map(g => `<span class="tag ${g.tag_type === "private_manual" ? "manual" : ""}"
+      ${g.tag_type === "private_manual" ? `onclick="removeTag('${t.track_pk}','${esc(g.tag)}')" title="tap to remove"` : ""}>${esc(g.tag)}</span>`).join("");
+  return `
     <div class="track" id="tr-${t.track_pk}">
       <div class="row1">
         <button class="playbtn" ${t.ytm_track_id ? "" : "disabled"} onclick="play('${t.ytm_track_id}', '${esc(t.canonical_artist)} — ${esc(t.canonical_title)}')">▶</button>
-        <div class="meta" onclick="this.parentElement.parentElement.querySelector('.tagrow').classList.toggle('open')">
+        <div class="meta">
           <div class="title">${esc(t.canonical_title)}</div>
           <div class="artist">${esc(t.canonical_artist)}${t.album_title ? " · " + esc(t.album_title) : ""}</div>
         </div>
         ${starButtons(t)}
+        <button class="more" onclick="trackMenu('${t.track_pk}')" title="more">⋯</button>
       </div>
+      ${flags.length ? `<div class="flagrow">${flags.join("")}</div>` : ""}
       <div class="tagrow">
-        ${t.tags.map(g => `<span class="tag ${g.tag_type === "private_manual" ? "manual" : ""}"
-            ${g.tag_type === "private_manual" ? `onclick="removeTag('${t.track_pk}','${esc(g.tag)}')" title="tap to remove"` : ""}>${esc(g.tag)}</span>`).join("")}
+        ${tags}
         <button class="addtag" onclick="addTag('${t.track_pk}')">+ tag</button>
+        ${opts.dismiss ? `<button class="addtag" onclick="dismissTrack('${t.track_pk}')">✓ dismiss</button>` : ""}
       </div>
-    </div>`).join("")
+    </div>`;
+}
+
+function renderLibrary() {
+  $("trackcount").textContent = state.total ? `· ${state.total}` : "";
+  const el = $("library");
+  if (!state.tracks.length) { el.innerHTML = '<div class="empty">No tracks match.</div>'; return; }
+  el.innerHTML = state.tracks.map(t => trackCard(t)).join("")
     + (state.tracks.length < state.total
         ? `<button class="loadmore" onclick="more()">Load more (${state.total - state.tracks.length} remaining)</button>` : "");
+}
+
+// ── ⋯ menu: block / don't-recommend / wrong-match ──
+async function trackMenu(pk) {
+  const t = (state.tracks.concat(state.inbox || [])).find(x => x.track_pk === pk) || {};
+  const bg = document.createElement("div");
+  bg.className = "menu";
+  bg.onclick = (ev) => { if (ev.target === bg) bg.remove(); };
+  bg.innerHTML = `<div class="sheet">
+    <button onclick="setFlag('${pk}','blocked_from_playlists',${t.blocked_from_playlists ? 0 : 1});this.closest('.menu').remove()">
+      ${t.blocked_from_playlists ? "Unblock" : "Block from playlists"}</button>
+    <button onclick="setFlag('${pk}','do_not_recommend',${t.do_not_recommend ? 0 : 1});this.closest('.menu').remove()">
+      ${t.do_not_recommend ? "Allow recommending" : "Don't recommend"}</button>
+    <button class="danger" onclick="wrongMatch('${pk}');this.closest('.menu').remove()">Wrong match (quarantine)</button>
+    <button onclick="this.closest('.menu').remove()">Cancel</button>
+  </div>`;
+  document.body.appendChild(bg);
+}
+
+async function setFlag(pk, flag, value) {
+  await api(`/api/tracks/${pk}/flags`, { method: "PUT", body: JSON.stringify({ [flag]: !!value }) });
+  toast(flag === "blocked_from_playlists" ? (value ? "Blocked" : "Unblocked") : (value ? "Won't recommend" : "Recommending"));
+  if (state.view === "library") loadTracks(); else if (state.view === "inbox") loadInbox();
+}
+
+async function wrongMatch(pk) {
+  if (!confirm("Mark as wrong match? It will be quarantined and removed from playlists.")) return;
+  await api(`/api/tracks/${pk}/wrong-match`, { method: "POST", body: "{}" });
+  toast("Quarantined → Needs Review");
+  if (state.view === "library") loadTracks(); else if (state.view === "inbox") loadInbox();
+}
+
+async function dismissTrack(pk) {
+  await api(`/api/tracks/${pk}/dismiss`, { method: "POST", body: "{}" });
+  toast("Dismissed from inbox");
+  loadInbox();
 }
 
 function more() { state.offset += state.limit; loadTracks(true); }
 
 async function rate(pk, rating) {
-  const t = state.tracks.find(x => x.track_pk === pk);
-  const newRating = (t.personal_rating === rating) ? null : rating;  // tap same star = clear
+  // The track may live in any pool (library, inbox, recent listens, now-playing).
+  const pools = [state.tracks || [], state.inbox || []];
+  let t = null;
+  for (const p of pools) { const f = p.find(x => x.track_pk === pk); if (f) { t = f; break; } }
+  const cur = t ? (t.personal_rating || 0) : 0;
+  const newRating = (cur === rating) ? null : rating;  // tap same star = clear
   await api(`/api/tracks/${pk}/rating`, { method: "PUT", body: JSON.stringify({ rating: newRating }) });
-  t.personal_rating = newRating;
-  renderLibrary();
+  if (t) t.personal_rating = newRating;
   toast(newRating ? ["", "Like", "Really like", "Love", "Perfect ✦"][newRating] : "Rating cleared");
+  // Refresh the active view; reload the inbox badge (rating clears inbox membership).
+  if (state.view === "library") renderLibrary();
+  else if (state.view === "inbox") loadInbox();
+  else if (state.view === "home") loadHome();
+  if (state.view !== "inbox") loadInbox();
 }
 
 async function addTag(pk) {
@@ -261,14 +354,53 @@ async function loadPlaylists() {
         <div class="name">${esc(r.playlist_name)} ${r.enabled ? "" : "· <span style='color:var(--dim)'>disabled</span>"}</div>
         <div class="sub">${r.ranking_mode} · ${desc}${r.max_tracks ? " · max " + r.max_tracks : ""}
           ${r.last_synced_at ? "<br>last synced " + r.last_synced_at.slice(0, 16).replace("T", " ") : "<br>never synced"}</div>
+        <div class="health" id="health-${r.rule_id}">…</div>
         <div class="actions">
-          <button onclick="previewRule('${r.rule_id}', '${esc(r.playlist_name)}')">Preview</button>
+          <button onclick="previewRule('${r.rule_id}', '${esc(r.playlist_name)}')">Preview · Why?</button>
           <button class="primary" onclick="syncRule('${r.rule_id}')">Sync to YTM</button>
+          <button onclick="showSnapshots('${r.rule_id}', '${esc(r.playlist_name)}')">Undo…</button>
           <button onclick='editRule(${JSON.stringify(r).replace(/'/g, "&#39;")})'>Edit</button>
           <button class="danger" onclick="deleteRule('${r.rule_id}')">Delete</button>
         </div>
       </div>`;
     }).join("") : '<div class="empty">No playlist rules yet.</div>');
+  rules.forEach(r => loadHealth(r.rule_id));
+}
+
+async function loadHealth(ruleId) {
+  const el = $(`health-${ruleId}`);
+  if (!el) return;
+  try {
+    const h = await api(`/api/playlists/${ruleId}/health`);
+    const bits = [`${h.compiled_count} tracks`];
+    if (h.average_rating != null) bits.push(`avg ★${h.average_rating}`);
+    if (h.unrated_count) bits.push(`${h.unrated_count} unrated`);
+    if (h.weak_metadata_count) bits.push(`${h.weak_metadata_count} weak meta`);
+    if (h.missing_from_ytm_count) bits.push(`${h.missing_from_ytm_count} missing`);
+    if (h.pending_dedup_count) bits.push(`${h.pending_dedup_count} dup?`);
+    if (h.held) { el.classList.add("held"); el.textContent = "⚠ HELD — " + h.sync_held_reason + " · " + bits.join(" · "); }
+    else el.textContent = bits.join(" · ");
+  } catch (e) { el.textContent = ""; }
+}
+
+async function showSnapshots(ruleId, name) {
+  const snaps = await api(`/api/playlists/${ruleId}/snapshots`);
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.onclick = (ev) => { if (ev.target === bg) bg.remove(); };
+  bg.innerHTML = `<div class="modal"><h2>${esc(name)} — snapshots</h2>
+    ${snaps.length ? snaps.map(s => `<div class="pl">
+        <div class="sub">${s.taken_at.slice(0,16).replace("T"," ")} · ${s.reason} · ${s.track_count} tracks</div>
+        <div class="actions"><button class="primary" onclick="restoreSnap(${s.snapshot_id})">Restore this</button></div>
+      </div>`).join("") : '<div class="empty">No snapshots yet.</div>'}
+    <div class="btnrow"><button onclick="this.closest('.modal-bg').remove()">Close</button></div>
+  </div>`;
+  document.body.appendChild(bg);
+}
+async function restoreSnap(id) {
+  if (!confirm("Restore this snapshot? Current state is snapshotted first so this is undoable.")) return;
+  try { await api(`/api/snapshots/${id}/restore`, { method: "POST", body: "{}" }); toast("Restored ✓"); document.querySelector(".modal-bg")?.remove(); loadPlaylists(); }
+  catch (e) { alert("Restore failed: " + e.message); }
 }
 
 function editRule(rule) {
@@ -327,10 +459,40 @@ function editRule(rule) {
 
 async function previewRule(ruleId, name) {
   const data = await api(`/api/playlists/${ruleId}/preview`);
-  alert(`${name} — ${data.tracks.length} tracks\n\n` +
-    data.tracks.slice(0, 25).map((t, i) =>
-      `${i + 1}. ${t.canonical_artist} — ${t.canonical_title}${t.personal_rating ? " " + "★".repeat(t.personal_rating) : ""}`
-    ).join("\n") + (data.tracks.length > 25 ? `\n…and ${data.tracks.length - 25} more` : ""));
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.onclick = (ev) => { if (ev.target === bg) bg.remove(); };
+  bg.innerHTML = `<div class="modal"><h2>${esc(name)} — ${data.tracks.length} tracks</h2>
+    ${data.tracks.length ? data.tracks.map((t, i) => `
+      <div class="track">
+        <div class="row1">
+          <div class="meta" onclick="this.closest('.track').querySelector('.evidence').style.display = this.closest('.track').querySelector('.evidence').style.display==='none'?'block':'none'">
+            <div class="title">${i + 1}. ${esc(t.canonical_title)}${t.personal_rating ? " " + "★".repeat(t.personal_rating) : ""}</div>
+            <div class="artist">${esc(t.canonical_artist)} · score ${t.score} <span style="color:var(--accent)">— Why?</span></div>
+          </div>
+        </div>
+        <div class="evidence" style="display:none">${evidenceHtml(t.evidence)}</div>
+      </div>`).join("") : '<div class="empty">No tracks match.</div>'}
+    <div class="btnrow"><button onclick="this.closest('.modal-bg').remove()">Close</button></div>
+  </div>`;
+  document.body.appendChild(bg);
+}
+
+function evidenceHtml(ev) {
+  if (!ev) return "";
+  const comps = ev.score_components || {};
+  const max = Math.max(0.0001, ...Object.values(comps).map(Math.abs));
+  const bars = Object.entries(comps).map(([k, v]) =>
+    `<div>${esc(k)} <b>${(+v).toFixed(3)}</b></div><div class="bar"><span style="width:${Math.max(0, v / max * 100)}%"></span></div>`
+  ).join("");
+  const m = ev.matched || {};
+  const matched = [
+    m.tags_any && m.tags_any.length ? "tags: " + m.tags_any.join(", ") : "",
+    m.tags_all && m.tags_all.length ? "all: " + m.tags_all.join(", ") : "",
+    m.min_rating ? "min ★" + m.min_rating : "",
+    "status: " + (m.status || "?"),
+  ].filter(Boolean).join(" · ");
+  return `<div><b>Score components</b></div>${bars}<div style="margin-top:6px">${esc(matched)}</div>`;
 }
 
 async function syncRule(ruleId) {
@@ -381,20 +543,116 @@ $("search").addEventListener("input", (e) => {
   searchTimer = setTimeout(() => { state.q = e.target.value.trim(); loadTracks(); }, 300);
 });
 
-$("tab-library").onclick = () => switchView("library");
-$("tab-playlists").onclick = () => switchView("playlists");
+// ── Home: now-playing + recent listens (T7) ──
+async function loadHome() {
+  try {
+    const np = await api("/api/now-playing");
+    const el = $("npcard");
+    if (np.playing) {
+      const p = np.playing, t = p.track;
+      el.innerHTML = `<div class="npcard">
+        <div class="lbl">▶ Now playing</div>
+        <div class="t">${esc(t ? t.canonical_title : p.track_name || "")}</div>
+        <div class="a">${esc(t ? t.canonical_artist : p.artist_name || "")}</div>
+        ${t ? `<div style="margin-top:10px">${starButtons(t)}</div>`
+            : '<div class="unmatched">Not in your library yet — rate it from recent listens below once it lands.</div>'}
+      </div>`;
+      if (t) el.querySelector(".stars").dataset.pk = t.track_pk;
+    } else {
+      el.innerHTML = "";
+    }
+  } catch (e) { $("npcard").innerHTML = ""; }
 
+  try {
+    const data = await api("/api/recent-listens?limit=10");
+    const list = data.listens || [];
+    $("recentlbl").style.display = list.length ? "" : "none";
+    $("recent").innerHTML = list.map(t => trackCard(t)).join("")
+      || '<div class="empty">No recent listens yet.</div>';
+  } catch (e) { $("recent").innerHTML = ""; }
+}
+
+let npTimer;
+function startHomePolling() {
+  stopHomePolling();
+  npTimer = setInterval(() => { if (!document.hidden && state.view === "home") loadHome(); }, 15000);
+}
+function stopHomePolling() { if (npTimer) clearInterval(npTimer); npTimer = null; }
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) stopHomePolling();
+  else if (state.view === "home") { loadHome(); startHomePolling(); }
+});
+
+// ── Inbox (T5) ──
+async function loadInbox() {
+  const data = await api("/api/inbox?limit=200");
+  state.inbox = data.tracks;
+  const badge = $("inboxbadge");
+  if (data.total) { badge.textContent = data.total; badge.style.display = ""; }
+  else badge.style.display = "none";
+  $("inbox").innerHTML = data.tracks.length
+    ? data.tracks.map(t => trackCard(t, { dismiss: true })).join("")
+    : '<div class="empty">Inbox zero ✓ — nothing to triage.</div>';
+}
+
+// ── Review queue: dedup pairs (S8) ──
+async function loadReview() {
+  const pairs = await api("/api/dedup");
+  const badge = $("reviewbadge");
+  if (pairs.length) { badge.textContent = pairs.length; badge.style.display = ""; }
+  else badge.style.display = "none";
+  $("review").innerHTML = pairs.length ? pairs.map(p => {
+    const side = (t) => t ? `<div style="flex:1;min-width:0">
+        <div class="title">${esc(t.canonical_title)}</div>
+        <div class="artist">${esc(t.canonical_artist)}${t.album_title ? " · " + esc(t.album_title) : ""}</div>
+        <div class="health">${t.match_status} · ${t.duration_ms ? Math.round(t.duration_ms/1000)+"s" : "?"} · ${t.personal_rating ? "★".repeat(t.personal_rating) : "unrated"}</div>
+      </div>` : "<div>(missing)</div>";
+    return `<div class="pl">
+      <div class="sub">Possible duplicate · ${esc(p.reason || "")}${p.duration_delta_ms != null ? " · Δ" + p.duration_delta_ms + "ms" : ""}</div>
+      <div style="display:flex;gap:10px;margin-bottom:10px">${side(p.track_a)}${side(p.track_b)}</div>
+      <div class="actions">
+        <button class="primary" onclick="mergePair(${p.id})">Merge (keep older)</button>
+        <button onclick="dismissPair(${p.id})">Not a duplicate</button>
+      </div>
+    </div>`;
+  }).join("") : '<div class="empty">No pending duplicate pairs.</div>';
+}
+async function mergePair(id) {
+  if (!confirm("Merge these two tracks? The newer one is folded into the older.")) return;
+  await api(`/api/dedup/${id}/merge`, { method: "POST", body: "{}" });
+  toast("Merged"); loadReview();
+}
+async function dismissPair(id) {
+  await api(`/api/dedup/${id}/dismiss`, { method: "POST", body: "{}" });
+  loadReview();
+}
+
+// ── Tabs ──
+$("tab-home").onclick = () => switchView("home");
+$("tab-library").onclick = () => switchView("library");
+$("tab-inbox").onclick = () => switchView("inbox");
+$("tab-playlists").onclick = () => switchView("playlists");
+$("tab-review").onclick = () => switchView("review");
+
+const VIEWS = ["home", "library", "inbox", "playlists", "review"];
 function switchView(v) {
   state.view = v;
-  $("library").style.display = v === "library" ? "" : "none";
-  $("playlists").style.display = v === "playlists" ? "" : "none";
-  $("tab-library").classList.toggle("active", v === "library");
-  $("tab-playlists").classList.toggle("active", v === "playlists");
+  VIEWS.forEach(name => {
+    $(name).style.display = name === v ? "" : "none";
+    const tab = $("tab-" + name);
+    if (tab) tab.classList.toggle("active", name === v);
+  });
+  $("stats").style.display = v === "library" ? "" : "none";
+  if (v === "home") { loadHome(); startHomePolling(); } else { stopHomePolling(); }
+  if (v === "library") loadTracks();
+  if (v === "inbox") loadInbox();
   if (v === "playlists") loadPlaylists();
+  if (v === "review") loadReview();
 }
 
 document.querySelector('#ratingchips .chip[data-rating=""]').classList.add("active");
-loadStats(); loadTracks(); loadTagChips();
+loadStats(); loadTracks(); loadTagChips(); loadHome(); startHomePolling();
+loadInbox(); loadReview();   // populate tab badges on boot
 </script>
 </body>
 </html>

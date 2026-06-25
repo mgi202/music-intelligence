@@ -33,6 +33,15 @@ CREATE TABLE IF NOT EXISTS tracks (
     -- never written by automation, only via explicit user action.
     personal_rating             INTEGER CHECK (personal_rating BETWEEN 1 AND 4),
     rated_at                    TEXT,
+    -- Identity-aware ingest (v2): stamped on every ingest sighting; set when
+    -- absent from 2 consecutive full scans, cleared on reappearance.
+    last_seen_at                TEXT,
+    missing_since               TEXT,
+    -- Hard negatives (v3): compiler-enforced switches, not tags.
+    blocked_from_playlists      INTEGER NOT NULL DEFAULT 0,
+    do_not_recommend            INTEGER NOT NULL DEFAULT 0,
+    -- Inbox workflow (v3): explicit dismissal timestamp.
+    inbox_dismissed_at          TEXT,
     created_at                  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (match_status IN (
@@ -235,6 +244,10 @@ CREATE TABLE IF NOT EXISTS playlist_rules (
     enabled                 INTEGER NOT NULL DEFAULT 1,
     max_tracks              INTEGER DEFAULT NULL,
     last_synced_at          TEXT,
+    -- Sync safety (v3): sha256 of last pushed ordered video_id list +
+    -- shrink-guard hold reason (NULL = no hold).
+    last_synced_hash        TEXT,
+    sync_held_reason        TEXT,
     created_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -334,3 +347,109 @@ CREATE TABLE IF NOT EXISTS sync_state (
     payload_hash        TEXT,
     updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Indexes on tracks columns added in v2/v3
+CREATE INDEX IF NOT EXISTS idx_tracks_missing_since ON tracks(missing_since);
+CREATE INDEX IF NOT EXISTS idx_tracks_last_seen_at  ON tracks(last_seen_at);
+
+-- ─────────────────────────────────────────
+-- Identity / dedup (schema v2)
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS track_aliases (
+    alias_key   TEXT PRIMARY KEY,          -- e.g. 'isrc:GBABC1234567', 'ytm:abc123', 'mbid:...', 'pk:synthetic:...'
+    track_pk    TEXT NOT NULL,
+    alias_type  TEXT NOT NULL CHECK (alias_type IN ('isrc','mbid','ytm','spotify','merged_pk')),
+    created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (track_pk) REFERENCES tracks(track_pk) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_track_aliases_track ON track_aliases(track_pk);
+
+CREATE TABLE IF NOT EXISTS dedup_review (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    track_pk_a        TEXT NOT NULL,
+    track_pk_b        TEXT NOT NULL,
+    artist_similarity REAL, title_similarity REAL, duration_delta_ms INTEGER,
+    reason            TEXT,
+    status            TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','merged','dismissed')),
+    created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_at       TEXT,
+    UNIQUE(track_pk_a, track_pk_b)
+);
+
+-- ─────────────────────────────────────────
+-- Artists / labels (schema v2; first-class entities)
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS artists (
+    artist_id              TEXT PRIMARY KEY,         -- 'mbid:<uuid>' or 'name:<sha16>'
+    name                   TEXT NOT NULL,
+    musicbrainz_artist_id  TEXT UNIQUE,
+    created_at             TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS track_artists (
+    track_pk   TEXT NOT NULL, artist_id TEXT NOT NULL,
+    role       TEXT NOT NULL DEFAULT 'primary' CHECK (role IN ('primary','featured','remixer')),
+    position   INTEGER DEFAULT 0,
+    PRIMARY KEY (track_pk, artist_id, role),
+    FOREIGN KEY (track_pk) REFERENCES tracks(track_pk) ON DELETE CASCADE,
+    FOREIGN KEY (artist_id) REFERENCES artists(artist_id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS labels (
+    label_id               TEXT PRIMARY KEY,
+    name                   TEXT NOT NULL,
+    musicbrainz_label_id   TEXT UNIQUE,
+    discogs_label_id       TEXT,
+    created_at             TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS track_labels (
+    track_pk TEXT NOT NULL, label_id TEXT NOT NULL,
+    catalogue_number TEXT,
+    PRIMARY KEY (track_pk, label_id),
+    FOREIGN KEY (track_pk) REFERENCES tracks(track_pk) ON DELETE CASCADE,
+    FOREIGN KEY (label_id) REFERENCES labels(label_id) ON DELETE CASCADE
+);
+
+-- ─────────────────────────────────────────
+-- Listens (schema v2; ListenBrainz + YTM history)
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS listens (
+    listen_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    listened_at     INTEGER NOT NULL,                 -- unix epoch from ListenBrainz
+    track_pk        TEXT,                             -- resolved when matchable; else NULL
+    recording_msid  TEXT, recording_mbid TEXT,
+    track_name      TEXT, artist_name TEXT,
+    raw_json        TEXT,
+    -- Source attribution (v3): which surface the listen came from.
+    source          TEXT NOT NULL DEFAULT 'listenbrainz'
+        CHECK (source IN ('listenbrainz','ytm_history')),
+    created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(listened_at, recording_msid)
+);
+CREATE INDEX IF NOT EXISTS idx_listens_track ON listens(track_pk);
+
+-- ─────────────────────────────────────────
+-- Metrics snapshots (schema v2; one row per worker pass)
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS metrics_snapshots (
+    snapshot_at        TEXT PRIMARY KEY,
+    total_tracks       INTEGER, with_isrc INTEGER, with_mbid INTEGER,
+    with_3plus_tags    INTEGER, rated INTEGER, missing_from_platform INTEGER,
+    listens_total      INTEGER,
+    by_status_json     TEXT, by_source_match_json TEXT
+);
+
+-- ─────────────────────────────────────────
+-- Playlist snapshots (schema v3; pre-sync undo, 60-day retention)
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS playlist_snapshots (
+    snapshot_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_id         TEXT NOT NULL,
+    taken_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reason          TEXT NOT NULL CHECK (reason IN ('pre_sync','pre_restore','manual')),
+    track_pks_json  TEXT NOT NULL,      -- ordered compiled list
+    video_ids_json  TEXT NOT NULL,      -- ordered list actually pushed
+    FOREIGN KEY (rule_id) REFERENCES playlist_rules(rule_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_snapshots_rule ON playlist_snapshots(rule_id, taken_at);
+
+-- Audit log: index by creation time (prune + reporting)
+CREATE INDEX IF NOT EXISTS idx_processing_events_created ON processing_events(created_at);

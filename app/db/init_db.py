@@ -33,6 +33,9 @@ def init_db(db_path: str | None = None) -> None:
         # don't have yet, since CREATE TABLE IF NOT EXISTS won't add them.
         _run_migrations(conn)
         conn.executescript(schema)
+        # Backfills run AFTER schema.sql so the v2 tables they touch exist on
+        # both fresh and upgraded databases. All backfills are idempotent.
+        _run_backfills(conn)
         conn.commit()
         print(f"Database initialised: {db_path or 'default path'}")
         _report_tables(conn)
@@ -61,6 +64,74 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tracks ADD COLUMN rated_at TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_rating ON tracks(personal_rating)")
         print("Migration applied: tracks.personal_rating + tracks.rated_at")
+
+    # ── Schema v2 (RC1 §S3): identity-aware ingest + takedown detection ──
+    if "last_seen_at" not in existing:
+        conn.execute("ALTER TABLE tracks ADD COLUMN last_seen_at TEXT")
+        conn.execute("ALTER TABLE tracks ADD COLUMN missing_since TEXT")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tracks_missing_since ON tracks(missing_since)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tracks_last_seen_at ON tracks(last_seen_at)"
+        )
+        print("Migration applied (v2): tracks.last_seen_at + tracks.missing_since")
+
+    # ── Schema v3 (RC2 §T1): hard negatives + inbox dismissal ──
+    if "blocked_from_playlists" not in existing:
+        conn.execute(
+            "ALTER TABLE tracks ADD COLUMN blocked_from_playlists INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.execute(
+            "ALTER TABLE tracks ADD COLUMN do_not_recommend INTEGER NOT NULL DEFAULT 0"
+        )
+        print("Migration applied (v3): tracks.blocked_from_playlists + tracks.do_not_recommend")
+    if "inbox_dismissed_at" not in existing:
+        conn.execute("ALTER TABLE tracks ADD COLUMN inbox_dismissed_at TEXT")
+        print("Migration applied (v3): tracks.inbox_dismissed_at")
+
+    # playlist_rules: sync-safety columns (v3)
+    pr_cols = {row["name"] for row in conn.execute("PRAGMA table_info(playlist_rules)")}
+    if pr_cols and "last_synced_hash" not in pr_cols:
+        conn.execute("ALTER TABLE playlist_rules ADD COLUMN last_synced_hash TEXT")
+        conn.execute("ALTER TABLE playlist_rules ADD COLUMN sync_held_reason TEXT")
+        print("Migration applied (v3): playlist_rules.last_synced_hash + sync_held_reason")
+
+    # listens: source attribution (v3). Only relevant if a v2 listens table
+    # already exists without the column; fresh installs get it from schema.sql.
+    listens_cols = {row["name"] for row in conn.execute("PRAGMA table_info(listens)")}
+    if listens_cols and "source" not in listens_cols:
+        conn.execute(
+            "ALTER TABLE listens ADD COLUMN source TEXT NOT NULL DEFAULT 'listenbrainz' "
+            "CHECK (source IN ('listenbrainz','ytm_history'))"
+        )
+        print("Migration applied (v3): listens.source")
+
+
+def _run_backfills(conn: sqlite3.Connection) -> None:
+    """Idempotent data backfills, run after schema.sql.
+
+    v2 (RC1 §S3): register identity aliases for every existing track from its
+    ytm_track_id and isrc columns. INSERT OR IGNORE makes this safe to re-run
+    and a no-op on a fresh database (no tracks yet).
+    """
+    rows = conn.execute(
+        "SELECT track_pk, ytm_track_id, isrc FROM tracks "
+        "WHERE ytm_track_id IS NOT NULL OR isrc IS NOT NULL"
+    ).fetchall()
+    for r in rows:
+        if r["ytm_track_id"]:
+            conn.execute(
+                "INSERT OR IGNORE INTO track_aliases (alias_key, track_pk, alias_type) "
+                "VALUES (?, ?, 'ytm')",
+                (f"ytm:{r['ytm_track_id']}", r["track_pk"]),
+            )
+        if r["isrc"]:
+            conn.execute(
+                "INSERT OR IGNORE INTO track_aliases (alias_key, track_pk, alias_type) "
+                "VALUES (?, ?, 'isrc')",
+                (f"isrc:{r['isrc'].upper().strip()}", r["track_pk"]),
+            )
 
 
 def _report_tables(conn: sqlite3.Connection) -> None:

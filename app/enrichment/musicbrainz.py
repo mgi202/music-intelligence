@@ -34,6 +34,9 @@ def _init_mb():
     return mb
 
 
+from dataclasses import field
+
+
 @dataclass
 class MusicBrainzResult:
     matched: bool
@@ -44,6 +47,10 @@ class MusicBrainzResult:
     release_date: str | None = None
     album_title: str | None = None
     confidence: float = 0.0
+    # All artist credits in order: [{"name", "mbid"}]. First is primary.
+    artist_credits: list[dict] = field(default_factory=list)
+    # Labels parsed from release info (best-effort): [{"name", "mbid", "catalogue_number"}]
+    labels: list[dict] = field(default_factory=list)
 
 
 def enrich(
@@ -94,26 +101,43 @@ def _parse_recording(rec: dict, confidence: float) -> MusicBrainzResult:
     recording_id = rec.get("id")
     title = rec.get("title")
 
-    # Primary artist
-    artist = ""
-    artist_credits = rec.get("artist-credit", [])
-    if artist_credits:
-        first = artist_credits[0]
-        if isinstance(first, dict):
-            artist = first.get("artist", {}).get("name", "")
+    # All artist credits, in order. The artist-credit list interleaves
+    # {"artist": {...}} dicts with join-phrase strings; keep only the dicts.
+    artist_credits: list[dict] = []
+    for c in rec.get("artist-credit", []):
+        if isinstance(c, dict) and "artist" in c:
+            a = c.get("artist", {})
+            name = a.get("name", "")
+            if name:
+                artist_credits.append({"name": name, "mbid": a.get("id")})
+    artist = artist_credits[0]["name"] if artist_credits else ""
 
     # ISRC (may be present if fetched via get_recordings_by_isrc)
     isrc_list = rec.get("isrc-list", [])
     isrc = isrc_list[0] if isrc_list else None
 
-    # Release date from first release
+    # Release date / album / labels from first release (best-effort; no extra calls)
     release_date = None
     album_title = None
+    labels: list[dict] = []
     releases = rec.get("release-list", [])
     if releases:
         first_release = releases[0]
         release_date = first_release.get("date")
         album_title = first_release.get("title")
+    seen_labels: set[str] = set()
+    for rel in releases:
+        for li in rel.get("label-info-list", []) or rel.get("label-info", []):
+            lbl = li.get("label", {}) if isinstance(li, dict) else {}
+            name = lbl.get("name")
+            if not name or name in seen_labels:
+                continue
+            seen_labels.add(name)
+            labels.append({
+                "name": name,
+                "mbid": lbl.get("id"),
+                "catalogue_number": li.get("catalog-number"),
+            })
 
     return MusicBrainzResult(
         matched=True,
@@ -124,6 +148,8 @@ def _parse_recording(rec: dict, confidence: float) -> MusicBrainzResult:
         release_date=release_date,
         album_title=album_title,
         confidence=confidence,
+        artist_credits=artist_credits,
+        labels=labels,
     )
 
 

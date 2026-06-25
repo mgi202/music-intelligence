@@ -1,14 +1,18 @@
 """
 Background worker — the system's heartbeat on the home server.
 
-Loops forever:
-  1. Ingest:   pull library delta from YouTube Music
-  2. Enrich:   run mandatory metadata pipeline on unenriched tracks
-  3. Sync:     compile all enabled playlist rules and push to YTM
+One pass runs six isolated stages (a failure in one never blocks the rest):
+  1. Ingest from YTM + takedown marking (2-scan rule)
+  2. Enrich (TTL-aware metadata pipeline)
+  3. Playlist sync (guarded: snapshots, shrink guard, hash short-circuit)
+  4. Listens import (ListenBrainz + YTM history) — env-gated
+  5. Metrics snapshot (one row per pass)
+  6. Prune (processing_events > 90d, playlist_snapshots > 60d)
+
+Any stage failure fires a one-line ntfy.sh push when NTFY_TOPIC is set.
 
 Interval controlled by WORKER_INTERVAL_MINUTES (default 360 = every 6 hours).
-Designed to run as the `worker` service in docker-compose. Safe to kill and
-restart at any point — every step is idempotent.
+Safe to kill and restart at any point — every step is idempotent.
 
 Usage:
     python scripts/run_worker.py            # loop forever
@@ -20,6 +24,7 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -35,16 +40,27 @@ logging.basicConfig(
 logger = logging.getLogger("worker")
 
 
+def _alert(stage: str, exc: Exception) -> None:
+    """Log a stage failure and push a one-line ntfy alert when configured."""
+    logger.exception("%s failed", stage)
+    try:
+        from app.observability import notify
+        notify(f"[music-intel] {stage} failed: {exc}")
+    except Exception:  # noqa: BLE001 — alerting must never raise
+        logger.exception("ntfy alert failed")
+
+
 def run_pass() -> None:
-    """One full ingest → enrich → sync pass. Each step isolated so one
-    failure doesn't block the others."""
+    """One full six-stage pass. Each stage is isolated."""
     from app.db.init_db import init_db
 
     init_db()  # idempotent — also applies pending migrations
 
+    pass_start = datetime.now(timezone.utc).isoformat()
     adapter = None
+    ingest_ok = False
 
-    # 1. Ingest from YTM
+    # ── 1. Ingest from YTM + takedown marking ──
     try:
         from app.ingestion.ytm_adapter import YouTubeMusicAdapter
         from app.ingestion.ledger import ingest_tokens
@@ -52,20 +68,27 @@ def run_pass() -> None:
         adapter = YouTubeMusicAdapter()
         tokens = adapter.fetch_library_snapshot()
         inserted, updated = ingest_tokens(tokens)
+        ingest_ok = True
         logger.info("Ingest: %d new, %d updated from YTM", inserted, updated)
-    except Exception:
-        logger.exception("Ingest failed — continuing with enrichment")
 
-    # 2. Enrich
+        from app.ingestion import takedown
+        takedown.record_full_scan(pass_start)
+        marked = takedown.mark_takedowns()
+        if marked:
+            logger.info("Takedown: %d tracks newly marked missing from YTM", marked)
+    except Exception as e:
+        _alert("Ingest", e)
+
+    # ── 2. Enrich (TTL-aware) ──
     try:
         from app.enrichment.pipeline import run_pipeline
 
         stats = run_pipeline(limit=int(os.getenv("ENRICH_BATCH_SIZE", "200")))
         logger.info("Enrichment: %s", stats)
-    except Exception:
-        logger.exception("Enrichment failed — continuing with playlist sync")
+    except Exception as e:
+        _alert("Enrichment", e)
 
-    # 3. Sync all enabled playlists
+    # ── 3. Playlist sync ──
     try:
         from app.db.connection import get_connection
         from app.playlists.sync import sync_playlist
@@ -88,11 +111,56 @@ def run_pass() -> None:
         for rule_id in rule_ids:
             try:
                 sync_playlist(rule_id, adapter)
-                logger.info("Synced playlist rule %s", rule_id)
             except Exception:
                 logger.exception("Sync failed for rule %s", rule_id)
-    except Exception:
-        logger.exception("Playlist sync stage failed")
+        logger.info("Playlist sync: %d rules processed", len(rule_ids))
+    except Exception as e:
+        _alert("Playlist sync", e)
+
+    # ── 4. Listens import (env-gated) ──
+    try:
+        from app.enrichment.listens_import import (
+            import_listenbrainz_listens,
+            import_ytm_history,
+        )
+
+        lb_user = os.getenv("LISTENBRAINZ_USER", "")
+        if lb_user:
+            n = import_listenbrainz_listens(lb_user)
+            logger.info("Listens import (ListenBrainz): %d new", n)
+        else:
+            logger.info("Listens import skipped — LISTENBRAINZ_USER not set")
+
+        if adapter is not None:
+            try:
+                n = import_ytm_history(adapter)
+                logger.info("Listens import (YTM history): %d new", n)
+            except Exception:
+                logger.exception("YTM history import failed")
+    except Exception as e:
+        _alert("Listens import", e)
+
+    # ── 5. Metrics snapshot ──
+    try:
+        from app.observability import snapshot_metrics
+
+        m = snapshot_metrics()
+        logger.info(
+            "Metrics: %d tracks, %d rated, %d listens, %d missing",
+            m["total_tracks"], m["rated"], m["listens_total"], m["missing_from_platform"],
+        )
+    except Exception as e:
+        _alert("Metrics snapshot", e)
+
+    # ── 6. Prune ──
+    try:
+        from app.observability import prune_processing_events, prune_playlist_snapshots
+
+        ev = prune_processing_events()
+        snaps = prune_playlist_snapshots()
+        logger.info("Prune: %d processing_events, %d playlist_snapshots removed", ev, snaps)
+    except Exception as e:
+        _alert("Prune", e)
 
 
 def main() -> None:

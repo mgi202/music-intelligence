@@ -74,10 +74,18 @@ def main():
     print(f"✓ Done: {new_count} new tracks, {updated_count} updated")
 
     # Seed utility playlists if this is the first run
-    from app.playlists.utility import seed_utility_playlists, seed_starter_tag_profiles
+    from app.playlists.utility import (
+        seed_utility_playlists,
+        seed_starter_tag_profiles,
+        seed_example_rules,
+    )
     seeded = seed_utility_playlists(target_platform="ytm", db_path=args.db_path)
     if seeded:
         print(f"✓ Seeded {seeded} utility playlist rules")
+
+    examples = seed_example_rules(target_platform="ytm", db_path=args.db_path)
+    if examples:
+        print(f"✓ Seeded {examples} example rules (disabled — enable in the UI)")
 
     profiles = seed_starter_tag_profiles(db_path=args.db_path)
     if profiles:

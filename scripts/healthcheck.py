@@ -100,8 +100,8 @@ def run_healthcheck(quiet: bool = False) -> int:
         hc.warn("OAuth file missing", f"{oauth_file} — run: python scripts/setup_ytm_oauth.py")
     else:
         try:
-            from ytmusicapi import YTMusic
-            YTMusic(oauth_file)
+            from app.ingestion.ytm_adapter import YouTubeMusicAdapter
+            YouTubeMusicAdapter(oauth_file).client
             hc.ok("OAuth credentials", oauth_file)
         except Exception as e:
             hc.fail("OAuth credentials invalid", str(e))

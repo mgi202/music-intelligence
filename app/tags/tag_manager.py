@@ -12,6 +12,7 @@ This module is the single entry point for all manual tag operations.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 
@@ -51,10 +52,11 @@ def apply_tag(
         if existing:
             return False  # Already applied
 
+        evidence_json = json.dumps({"notes": notes}) if notes else None
         conn.execute("""
             INSERT INTO track_tags (track_pk, tag, tag_type, source, confidence, evidence_json)
             VALUES (?, ?, 'private_manual', 'manual', 1.0, ?)
-        """, (track_pk, tag, f'{{"notes": "{notes or ""}"}}' if notes else None))
+        """, (track_pk, tag, evidence_json))
 
         return True
 

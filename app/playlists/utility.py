@@ -56,6 +56,7 @@ UTILITY_PLAYLISTS = [
                     "metadata_only",
                     "no_audio_source",
                     "weak_audio_candidate",
+                    "quarantined",
                 ],
             },
             "utility_sort": "status",
@@ -110,6 +111,36 @@ UTILITY_PLAYLISTS = [
             "utility_sort": "updated_at_desc",
         },
     },
+    {
+        "rule_id": "utility__missing_from_ytm",
+        "playlist_name": "🕳 Missing from YTM",
+        "ranking_mode": "utility",
+        "max_tracks": 500,
+        "rule_json": {
+            "eligibility": {
+                "tags_any": [],
+                "tags_all": [],
+                "tags_none": [],
+                "missing_from_platform": True,
+            },
+            "utility_sort": "updated_at_desc",
+        },
+    },
+    {
+        "rule_id": "utility__inbox",
+        "playlist_name": "📥 Inbox",
+        "ranking_mode": "utility",
+        "max_tracks": 500,
+        "rule_json": {
+            "eligibility": {
+                "tags_any": [],
+                "tags_all": [],
+                "tags_none": [],
+                "in_inbox": True,
+            },
+            "utility_sort": "created_at_desc",
+        },
+    },
 ]
 
 
@@ -151,6 +182,54 @@ def seed_utility_playlists(
             ))
             inserted += 1
 
+    return inserted
+
+
+EXAMPLE_RULES = [
+    {
+        "rule_id": "example__forgotten_gems",
+        "playlist_name": "💎 Forgotten Gems",
+        "ranking_mode": "mood",
+        "max_tracks": 100,
+        "rule_json": {
+            "eligibility": {"min_rating": 3, "last_played_before_days": 90},
+        },
+    },
+    {
+        "rule_id": "example__deep_cuts",
+        "playlist_name": "🕰 Deep Cuts",
+        "ranking_mode": "discovery",
+        "max_tracks": 100,
+        "rule_json": {
+            "eligibility": {"added_before_days": 180, "last_played_before_days": 90},
+        },
+    },
+]
+
+
+def seed_example_rules(
+    target_platform: str = "ytm", db_path: str | None = None
+) -> int:
+    """Insert disabled example forgotten-gems rules (RC2 §T6.3) for the user to
+    enable. Returns the number inserted. Disabled so they never auto-sync."""
+    now = datetime.now(timezone.utc).isoformat()
+    inserted = 0
+    with db_conn(db_path) as conn:
+        for pl in EXAMPLE_RULES:
+            if conn.execute(
+                "SELECT rule_id FROM playlist_rules WHERE rule_id = ?", (pl["rule_id"],)
+            ).fetchone():
+                continue
+            conn.execute(
+                """INSERT INTO playlist_rules
+                       (rule_id, playlist_name, target_platform, rule_json,
+                        ranking_mode, enabled, max_tracks, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)""",
+                (pl["rule_id"], pl["playlist_name"], target_platform,
+                 json.dumps(pl["rule_json"]), pl["ranking_mode"],
+                 pl.get("max_tracks"), now, now),
+            )
+            inserted += 1
     return inserted
 
 

@@ -21,16 +21,18 @@ processing_events written for failures.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 
 from app.db.connection import db_conn
 from app.enrichment import bandcamp, discogs, lastfm, listenbrainz, musicbrainz
+from app.ingestion.merge import merge_tracks
 
 load_dotenv()
 
@@ -40,6 +42,10 @@ _BATCH_SIZE = int(os.getenv("ENRICHMENT_BATCH_SIZE", "500"))
 
 # A source is "specific" if it returned ≥ this many tags with real content
 _SPECIFIC_TAG_THRESHOLD = 2
+
+# Re-enrichment TTLs (RC1 §S7.2): how stale before we re-run a track.
+_WEAK_TTL_DAYS = 30      # public_metadata_weak
+_ENRICHED_TTL_DAYS = 90  # metadata_enriched
 
 
 def run_pipeline(
@@ -57,15 +63,25 @@ def run_pipeline(
     """
     with db_conn(db_path) as conn:
         if track_pks is None:
+            now = datetime.now(timezone.utc)
+            weak_cutoff = (now - timedelta(days=_WEAK_TTL_DAYS)).isoformat()
+            enriched_cutoff = (now - timedelta(days=_ENRICHED_TTL_DAYS)).isoformat()
+            # Select fresh tracks plus stale ones past their re-enrichment TTL.
+            # "last enriched" is enrichment_state.updated_at.
             rows = conn.execute("""
-                SELECT track_pk, canonical_title, canonical_artist,
-                       normalized_title, normalized_artist,
-                       isrc, duration_ms, musicbrainz_recording_id
-                FROM tracks
-                WHERE match_status = 'metadata_only'
-                ORDER BY created_at ASC
+                SELECT t.track_pk, t.canonical_title, t.canonical_artist,
+                       t.normalized_title, t.normalized_artist,
+                       t.isrc, t.duration_ms, t.musicbrainz_recording_id
+                FROM tracks t
+                LEFT JOIN enrichment_state es ON es.track_pk = t.track_pk
+                WHERE t.match_status = 'metadata_only'
+                   OR (t.match_status = 'public_metadata_weak'
+                       AND (es.updated_at IS NULL OR es.updated_at < ?))
+                   OR (t.match_status = 'metadata_enriched'
+                       AND (es.updated_at IS NULL OR es.updated_at < ?))
+                ORDER BY t.created_at ASC
                 LIMIT ?
-            """, (limit or _BATCH_SIZE,)).fetchall()
+            """, (weak_cutoff, enriched_cutoff, limit or _BATCH_SIZE)).fetchall()
         else:
             rows = conn.execute(f"""
                 SELECT track_pk, canonical_title, canonical_artist,
@@ -124,6 +140,13 @@ def _enrich_track(track: dict, db_path: str | None) -> None:
                         f"UPDATE tracks SET {set_clause} WHERE track_pk = ?",
                         list(updates.values()) + [pk],
                     )
+                # Identity reconciliation: a discovered ISRC/MBID may collide
+                # with an existing track → exact-match merge (keep older).
+                # Otherwise register the identity as an alias. pk may change to
+                # the surviving track if the current row was the duplicate.
+                pk = _reconcile_identity(pk, isrc, mb_recording_id, conn)
+                # Capture artists + labels from MB credits (no extra API calls).
+                _capture_artists_labels(pk, mb_result, conn)
             _log_event(pk, "musicbrainz", "success", f"MBID={mb_result.recording_id}", db_path)
         else:
             _log_event(pk, "musicbrainz", "no_match", "No MusicBrainz result", db_path)
@@ -200,31 +223,36 @@ def _enrich_track(track: dict, db_path: str | None) -> None:
         _log_event(pk, "discogs", "error", str(e), db_path)
 
     # ── 5. Bandcamp (best-effort) ─────────────────────────────────────────────
-    # Only attempt if a manual URL is stored in the track's extra data.
-    # Bandcamp is not auto-searched at scale.
+    # Bandcamp has no catalogue API and is not auto-searched at scale. When no
+    # manual URL exists we skip the network call entirely and just record
+    # unavailability on the enrichment_state (flag only — NO per-track
+    # processing_event, which would flood the audit log on every pass).
     bc_url = None  # TODO: hook into manual URL store when available
-    try:
-        bc_result = bandcamp.enrich(title, artist, manual_url=bc_url)
-        if bc_result.matched:
-            enrichment_flags["has_bandcamp_data"] = 1
-            if bc_result.tags:
-                source_count += 1
-                for tag in bc_result.tags:
-                    all_tags.append({
-                        "tag": tag, "source": "bandcamp",
-                        "confidence": bc_result.confidence,
-                        "tag_type": "public",
-                    })
-            _log_event(pk, "bandcamp", "success", f"tags={len(bc_result.tags)}", db_path)
-        else:
-            # Log unavailability as spec requires — never silent
+    if bc_url:
+        try:
+            bc_result = bandcamp.enrich(title, artist, manual_url=bc_url)
+            if bc_result.matched:
+                enrichment_flags["has_bandcamp_data"] = 1
+                if bc_result.tags:
+                    source_count += 1
+                    for tag in bc_result.tags:
+                        all_tags.append({
+                            "tag": tag, "source": "bandcamp",
+                            "confidence": bc_result.confidence,
+                            "tag_type": "public",
+                        })
+                _log_event(pk, "bandcamp", "success", f"tags={len(bc_result.tags)}", db_path)
+            else:
+                enrichment_flags["bandcamp_unavailable"] = 1
+                enrichment_flags["bandcamp_checked_at"] = datetime.now(timezone.utc).isoformat()
+                _log_event(pk, "bandcamp", "unavailable", bc_result.notes or "", db_path)
+        except Exception as e:
             enrichment_flags["bandcamp_unavailable"] = 1
             enrichment_flags["bandcamp_checked_at"] = datetime.now(timezone.utc).isoformat()
-            _log_event(pk, "bandcamp", "unavailable", bc_result.notes or "No URL provided", db_path)
-    except Exception as e:
+            _log_event(pk, "bandcamp", "error", str(e), db_path)
+    else:
         enrichment_flags["bandcamp_unavailable"] = 1
         enrichment_flags["bandcamp_checked_at"] = datetime.now(timezone.utc).isoformat()
-        _log_event(pk, "bandcamp", "error", str(e), db_path)
 
     # ── Persist tags + update state ───────────────────────────────────────────
     with db_conn(db_path) as conn:
@@ -234,6 +262,123 @@ def _enrich_track(track: dict, db_path: str | None) -> None:
         conn.execute(
             "UPDATE tracks SET match_status = ?, updated_at = ? WHERE track_pk = ?",
             (new_status, datetime.now(timezone.utc).isoformat(), pk),
+        )
+
+
+def _created_at(pk: str, conn: sqlite3.Connection) -> str:
+    row = conn.execute("SELECT created_at FROM tracks WHERE track_pk = ?", (pk,)).fetchone()
+    return row["created_at"] if row and row["created_at"] else ""
+
+
+def _merge_keep_older(pk_a: str, pk_b: str, conn: sqlite3.Connection) -> str:
+    """Merge two tracks, keeping the one with the older created_at. Returns survivor."""
+    ca, cb = _created_at(pk_a, conn), _created_at(pk_b, conn)
+    keep, dup = (pk_a, pk_b) if ca <= cb else (pk_b, pk_a)
+    merge_tracks(keep, dup, conn)
+    return keep
+
+
+def _reconcile_identity(
+    pk: str, isrc: str | None, mbid: str | None, conn: sqlite3.Connection
+) -> str:
+    """Reconcile a track's discovered identity (ISRC/MBID) against the ledger.
+
+    Exact collision with a different track → merge (keep older). No collision →
+    register the identity as an alias. Returns the surviving track_pk.
+    """
+    surviving = pk
+
+    if isrc:
+        isrc_norm = isrc.upper().strip()
+        other = _other_pk(conn, surviving, alias_key=f"isrc:{isrc_norm}",
+                          column_sql="UPPER(isrc) = ?", column_val=isrc_norm)
+        if other:
+            surviving = _merge_keep_older(surviving, other, conn)
+        else:
+            conn.execute(
+                "INSERT OR IGNORE INTO track_aliases (alias_key, track_pk, alias_type) "
+                "VALUES (?, ?, 'isrc')",
+                (f"isrc:{isrc_norm}", surviving),
+            )
+
+    if mbid:
+        other = _other_pk(conn, surviving, alias_key=f"mbid:{mbid}",
+                          column_sql="musicbrainz_recording_id = ?", column_val=mbid)
+        if other:
+            surviving = _merge_keep_older(surviving, other, conn)
+        else:
+            conn.execute(
+                "INSERT OR IGNORE INTO track_aliases (alias_key, track_pk, alias_type) "
+                "VALUES (?, ?, 'mbid')",
+                (f"mbid:{mbid}", surviving),
+            )
+
+    return surviving
+
+
+def _other_pk(
+    conn: sqlite3.Connection, current: str, alias_key: str,
+    column_sql: str, column_val: str,
+) -> str | None:
+    """Find an existing track (≠ current) matching an identity, via alias then column."""
+    row = conn.execute(
+        "SELECT track_pk FROM track_aliases WHERE alias_key = ?", (alias_key,)
+    ).fetchone()
+    if row and row["track_pk"] != current:
+        return row["track_pk"]
+    row = conn.execute(
+        f"SELECT track_pk FROM tracks WHERE {column_sql} AND track_pk != ? LIMIT 1",
+        (column_val, current),
+    ).fetchone()
+    return row["track_pk"] if row else None
+
+
+def _entity_id(name: str, mbid: str | None) -> str:
+    if mbid:
+        return f"mbid:{mbid}"
+    digest = hashlib.sha256(name.lower().strip().encode("utf-8")).hexdigest()[:16]
+    return f"name:{digest}"
+
+
+def _capture_artists_labels(
+    pk: str, mb_result, conn: sqlite3.Connection
+) -> None:
+    """Upsert artists/track_artists and labels/track_labels from MB credits.
+
+    Role: first credit = 'primary', the rest = 'featured' (remixer detection
+    deferred). Best-effort; uses only data already in the MB response.
+    """
+    for i, credit in enumerate(mb_result.artist_credits or []):
+        name = credit.get("name")
+        if not name:
+            continue
+        artist_id = _entity_id(name, credit.get("mbid"))
+        conn.execute(
+            "INSERT OR IGNORE INTO artists (artist_id, name, musicbrainz_artist_id) "
+            "VALUES (?, ?, ?)",
+            (artist_id, name, credit.get("mbid")),
+        )
+        role = "primary" if i == 0 else "featured"
+        conn.execute(
+            "INSERT OR IGNORE INTO track_artists (track_pk, artist_id, role, position) "
+            "VALUES (?, ?, ?, ?)",
+            (pk, artist_id, role, i),
+        )
+
+    for label in mb_result.labels or []:
+        name = label.get("name")
+        if not name:
+            continue
+        label_id = _entity_id(name, label.get("mbid"))
+        conn.execute(
+            "INSERT OR IGNORE INTO labels (label_id, name, musicbrainz_label_id) "
+            "VALUES (?, ?, ?)",
+            (label_id, name, label.get("mbid")),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO track_labels (track_pk, label_id, catalogue_number) "
+            "VALUES (?, ?, ?)",
+            (pk, label_id, label.get("catalogue_number")),
         )
 
 

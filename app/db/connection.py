@@ -34,6 +34,10 @@ def get_connection(db_path: str | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
+    # Wait up to 5s for a competing writer before raising SQLITE_BUSY. The
+    # worker (writer) and API (reader/writer) can contend; WAL allows
+    # concurrent readers but only one writer, so this avoids spurious locks.
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 

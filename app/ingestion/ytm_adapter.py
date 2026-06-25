@@ -11,6 +11,11 @@ Key ytmusicapi behaviours:
     - videoId               is the platform track ID → stored as ytm_track_id
     - Playlist write uses create_playlist() + add_playlist_items() or remove_playlist_items()
     - Playlists are identified by browseId (playlist_id in this system)
+    - Playlist sync is rewrite-on-reorder (locked decision): an unchanged
+      videoId sequence is a no-op; any order/membership change clears the
+      playlist and re-adds the full target list in ranked order. Order is
+      part of the playlist's value, so diff-patching (which ignores order)
+      is intentionally not used.
 
 Rate limiting: ytmusicapi calls are synchronous HTTP. For large libraries (10k+)
 the fetch can take 30–90 seconds. No explicit rate limiting needed for read ops;
@@ -35,6 +40,7 @@ _YTM_CLIENT_ID = os.getenv("YTM_CLIENT_ID", "")
 _YTM_CLIENT_SECRET = os.getenv("YTM_CLIENT_SECRET", "")
 _WRITE_BATCH_SIZE = 25     # YTM add_playlist_items batch size
 _WRITE_DELAY_S = 0.5       # Seconds between write batches
+_RETRY_BACKOFF_S = (2, 8, 30)   # Retry delays for failed write batches (×3)
 
 
 class YouTubeMusicAdapter(StreamingPlatformAdapter):
@@ -69,16 +75,36 @@ class YouTubeMusicAdapter(StreamingPlatformAdapter):
 
     def fetch_library_snapshot(self) -> list[TrackToken]:
         """
-        Fetch all liked/saved songs from the YTM library.
+        Fetch the full YTM library: both saved/library songs AND liked songs,
+        deduped by videoId.
 
-        Uses limit=10000 which ytmusicapi will page automatically.
-        For very large libraries (30k+), this may take 1–2 minutes.
+        Liked songs are a distinct surface from the library in YTM; fetching
+        only one drops tracks. Each surface is fetched independently so a
+        failure on one does not lose the other.
         """
-        raw_tracks = self.client.get_library_songs(limit=10000)
-        tokens = []
-        for item in raw_tracks:
+        raw_items: list[dict] = []
+
+        try:
+            raw_items.extend(self.client.get_library_songs(limit=None) or [])
+        except Exception as e:  # noqa: BLE001 — one surface failing must not kill ingest
+            print(f"Warning: get_library_songs failed: {e}")
+
+        try:
+            liked = self.client.get_liked_songs(limit=None) or {}
+            raw_items.extend(liked.get("tracks", []) if isinstance(liked, dict) else [])
+        except Exception as e:  # noqa: BLE001
+            print(f"Warning: get_liked_songs failed: {e}")
+
+        tokens: list[TrackToken] = []
+        seen_video_ids: set[str] = set()
+        for item in raw_items:
+            video_id = item.get("videoId")
+            if video_id and video_id in seen_video_ids:
+                continue
             token = self._item_to_token(item)
             if token:
+                if video_id:
+                    seen_video_ids.add(video_id)
                 tokens.append(token)
         return tokens
 
@@ -97,12 +123,16 @@ class YouTubeMusicAdapter(StreamingPlatformAdapter):
         video_id = item.get("videoId")
         title = item.get("title", "").strip()
 
-        # Get primary artist name
+        # Join ALL artist names — collaborators are part of track identity and
+        # dropping them ("artists[0] only") hurts MusicBrainz matching.
         artists = item.get("artists") or []
-        if isinstance(artists, list) and artists:
-            artist_name = artists[0].get("name", "") if isinstance(artists[0], dict) else str(artists[0])
-        else:
-            artist_name = ""
+        names: list[str] = []
+        if isinstance(artists, list):
+            for a in artists:
+                name = a.get("name", "") if isinstance(a, dict) else str(a)
+                if name and name.strip():
+                    names.append(name.strip())
+        artist_name = ", ".join(names)
 
         if not title:
             return None
@@ -146,41 +176,44 @@ class YouTubeMusicAdapter(StreamingPlatformAdapter):
         playlist_id: str | None,
         track_ids: list[str],
         playlist_name: str | None = None,
+        existing: list[str] | None = None,
     ) -> str:
         """
-        Write a playlist to YTM.
+        Write a playlist to YTM (locked decision: rewrite-on-reorder).
 
         If playlist_id is None: creates a new playlist and returns its ID.
-        If playlist_id is given: diffs against existing tracks and patches.
+        If playlist_id is given: compares the existing videoId *sequence* to
+        the target sequence:
+          - identical sequence (order AND membership) → no-op, return id
+          - any difference → remove all existing items, then add the full
+            target list in ranked order
 
-        track_ids are YTM videoIds.
+        Order is part of the playlist's value (DJ-style energy arcs), so a
+        reorder is a real change. Incremental diff-patching cannot express a
+        reorder, so we rewrite. track_ids are YTM videoIds, already ranked.
 
-        Patch strategy (per spec):
-          < 20% change → incremental add/remove
-          ≥ 20% change → clear and replace
+        Compile-before-clear invariant (RC2 §T3.1): an EMPTY track_ids list is
+        never destructive — it returns without clearing. Callers must compile a
+        non-empty target before any rewrite.
+
+        `existing` may be supplied by the caller to avoid a redundant fetch.
         """
+        if not track_ids:
+            return playlist_id or ""  # never clear toward an empty target
+
         if playlist_id is None:
             return self._create_and_populate(playlist_name or "Untitled", track_ids)
 
-        existing = self._get_playlist_video_ids(playlist_id)
-        existing_set = set(existing)
-        target_set = set(track_ids)
+        if existing is None:
+            existing = self._get_playlist_video_ids(playlist_id)
 
-        to_add = [vid for vid in track_ids if vid not in existing_set]
-        to_remove = [vid for vid in existing if vid not in target_set]
-        total_changes = len(to_add) + len(to_remove)
-        total_current = len(existing)
+        if existing == track_ids:
+            return playlist_id  # identical sequence — nothing to do
 
-        if total_current > 0 and (total_changes / total_current) >= 0.20:
-            # Large change — clear and replace
+        # Any difference (order or membership) → full rewrite in ranked order.
+        if existing:
             self._clear_playlist(playlist_id, existing)
-            self._batch_add(playlist_id, track_ids)
-        else:
-            # Incremental patch
-            if to_remove:
-                self._remove_tracks(playlist_id, to_remove)
-            if to_add:
-                self._batch_add(playlist_id, to_add)
+        self._batch_add(playlist_id, track_ids)
 
         return playlist_id
 
@@ -219,8 +252,21 @@ class YouTubeMusicAdapter(StreamingPlatformAdapter):
     def _batch_add(self, playlist_id: str, video_ids: list[str]) -> None:
         for i in range(0, len(video_ids), _WRITE_BATCH_SIZE):
             batch = video_ids[i: i + _WRITE_BATCH_SIZE]
-            self.client.add_playlist_items(playlist_id, batch)
+            self._add_with_retries(playlist_id, batch)
             time.sleep(_WRITE_DELAY_S)
+
+    def _add_with_retries(self, playlist_id: str, batch: list[str]) -> None:
+        """Add one batch, retrying ×3 with backoff (2s/8s/30s) on failure."""
+        last_exc: Exception | None = None
+        for attempt in range(len(_RETRY_BACKOFF_S) + 1):
+            try:
+                self.client.add_playlist_items(playlist_id, batch)
+                return
+            except Exception as e:  # noqa: BLE001 — transient YTM/network errors
+                last_exc = e
+                if attempt < len(_RETRY_BACKOFF_S):
+                    time.sleep(_RETRY_BACKOFF_S[attempt])
+        raise last_exc  # exhausted retries
 
     def _clear_playlist(self, playlist_id: str, video_ids: list[str]) -> None:
         """Remove all tracks from a playlist."""
