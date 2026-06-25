@@ -73,40 +73,87 @@ class YouTubeMusicAdapter(StreamingPlatformAdapter):
 
     # ── Library fetch ─────────────────────────────────────────────────────────
 
+    # Pseudo-playlists already covered elsewhere or not made of songs. ytmusicapi
+    # uses stable ids for these: LM = "Liked Music" (covered by get_liked_songs),
+    # SE = "Episodes for Later" (podcast episodes, not songs).
+    _SKIP_PLAYLIST_IDS = {"LM", "SE"}
+    # Title fallback only when no id/type signal is available.
+    _SKIP_PLAYLIST_TITLES = {"liked music", "your likes", "episodes for later"}
+
     def fetch_library_snapshot(self) -> list[TrackToken]:
         """
-        Fetch the full YTM library: both saved/library songs AND liked songs,
-        deduped by videoId.
+        Fetch the full YTM canonical surface: saved/library songs, liked songs,
+        AND the tracks of every user playlist — all deduped by videoId.
 
-        Liked songs are a distinct surface from the library in YTM; fetching
-        only one drops tracks. Each surface is fetched independently so a
-        failure on one does not lose the other.
+        Migration tools (Spotify→YTM) create *playlists* but usually don't add
+        songs to library/liked, so playlist tracks would otherwise never enter
+        the ledger. Each surface is fetched independently and a failure on one
+        (a single bad playlist included) logs a warning and continues, never
+        killing the ingest. A track appearing on several surfaces yields one
+        token thanks to the shared `seen_video_ids` set.
         """
-        raw_items: list[dict] = []
+        tokens: list[TrackToken] = []
+        seen_video_ids: set[str] = set()
+
+        def _absorb(raw_items: list[dict]) -> None:
+            for item in raw_items or []:
+                video_id = item.get("videoId")
+                if video_id and video_id in seen_video_ids:
+                    continue
+                token = self._item_to_token(item)
+                if token:
+                    if video_id:
+                        seen_video_ids.add(video_id)
+                    tokens.append(token)
 
         try:
-            raw_items.extend(self.client.get_library_songs(limit=None) or [])
+            _absorb(self.client.get_library_songs(limit=None) or [])
         except Exception as e:  # noqa: BLE001 — one surface failing must not kill ingest
             print(f"Warning: get_library_songs failed: {e}")
 
         try:
             liked = self.client.get_liked_songs(limit=None) or {}
-            raw_items.extend(liked.get("tracks", []) if isinstance(liked, dict) else [])
+            _absorb(liked.get("tracks", []) if isinstance(liked, dict) else [])
         except Exception as e:  # noqa: BLE001
             print(f"Warning: get_liked_songs failed: {e}")
 
-        tokens: list[TrackToken] = []
-        seen_video_ids: set[str] = set()
-        for item in raw_items:
-            video_id = item.get("videoId")
-            if video_id and video_id in seen_video_ids:
+        # ── Playlists: every user playlist, one bad playlist isolated ──
+        try:
+            playlists = self.client.get_library_playlists(limit=None) or []
+        except Exception as e:  # noqa: BLE001 — enumerate failure must not kill ingest
+            print(f"Warning: get_library_playlists failed: {e}")
+            playlists = []
+
+        for pl in playlists:
+            if not self._should_ingest_playlist(pl):
                 continue
-            token = self._item_to_token(item)
-            if token:
-                if video_id:
-                    seen_video_ids.add(video_id)
-                tokens.append(token)
+            playlist_id = pl.get("playlistId") if isinstance(pl, dict) else None
+            if not playlist_id:
+                continue
+            try:
+                playlist = self.client.get_playlist(playlist_id, limit=10000)
+                _absorb((playlist or {}).get("tracks", []))
+            except Exception as e:  # noqa: BLE001 — one playlist failing is non-fatal
+                print(f"Warning: get_playlist({playlist_id}) failed: {e}")
+                continue
+
         return tokens
+
+    def _should_ingest_playlist(self, pl: dict) -> bool:
+        """Filter pseudo-playlists (Liked Music) and non-song playlists (podcasts).
+
+        Prefers ytmusicapi's stable playlistId; falls back to title only when no
+        id signal is present.
+        """
+        if not isinstance(pl, dict):
+            return False
+        playlist_id = pl.get("playlistId")
+        if playlist_id in self._SKIP_PLAYLIST_IDS:
+            return False
+        title = (pl.get("title") or "").strip().lower()
+        if title in self._SKIP_PLAYLIST_TITLES:
+            return False
+        return True
 
     def fetch_playlist_tracks(self, playlist_id: str) -> list[TrackToken]:
         """Fetch all tracks from a specific YTM playlist by browseId."""

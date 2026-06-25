@@ -123,6 +123,7 @@ def run_pass() -> None:
             import_lastfm_listens,
             import_listenbrainz_listens,
             import_ytm_history,
+            relink_unmatched_listens,
         )
 
         lb_user = os.getenv("LISTENBRAINZ_USER", "")
@@ -145,6 +146,10 @@ def run_pass() -> None:
                 logger.info("Listens import (YTM history): %d new", n)
             except Exception:
                 logger.exception("YTM history import failed")
+
+        # Re-link previously-unmatched listens against the (now larger) library.
+        relinked = relink_unmatched_listens()
+        logger.info("Listens re-resolution: %d newly linked", relinked)
     except Exception as e:
         _alert("Listens import", e)
 
@@ -154,8 +159,9 @@ def run_pass() -> None:
 
         m = snapshot_metrics()
         logger.info(
-            "Metrics: %d tracks, %d rated, %d listens, %d missing",
-            m["total_tracks"], m["rated"], m["listens_total"], m["missing_from_platform"],
+            "Metrics: %d tracks, %d rated, %d listens (%d matched), %d missing",
+            m["total_tracks"], m["rated"], m["listens_total"],
+            m["listens_matched"], m["missing_from_platform"],
         )
     except Exception as e:
         _alert("Metrics snapshot", e)

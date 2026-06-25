@@ -4,6 +4,7 @@ from app.db.connection import db_conn, get_connection
 from app.enrichment.listens_import import (
     import_lastfm_listens,
     import_listenbrainz_listens,
+    relink_unmatched_listens,
 )
 from app.ingestion.normalise import (
     _unicode_normalise,
@@ -136,6 +137,45 @@ def test_listens_import_is_idempotent(db, monkeypatch):
         assert conn.execute("SELECT COUNT(*) FROM listens").fetchone()[0] == 2
     finally:
         conn.close()
+
+
+def test_relink_unmatched_listens_links_then_noop(db):
+    """A listen imported before its track existed re-links once the track lands,
+    and a second sweep is a no-op (idempotent)."""
+    norm_title = _unicode_normalise(normalise_title("Late Track"))
+    norm_artist = _unicode_normalise(normalise_artist("Late Artist"))
+    with db_conn(db) as conn:
+        # Two scrobbles of the same (still unmatched) track + one that stays unmatched.
+        for ts in (1000, 2000):
+            conn.execute(
+                "INSERT INTO listens (listened_at, track_pk, track_name, artist_name, source) "
+                "VALUES (?, NULL, 'Late Track', 'Late Artist', 'lastfm')", (ts,))
+        conn.execute(
+            "INSERT INTO listens (listened_at, track_pk, track_name, artist_name, source) "
+            "VALUES (3000, NULL, 'Never Match', 'Nobody', 'lastfm')")
+
+    # Sweep before the track exists: nothing links.
+    assert relink_unmatched_listens(db_path=db) == 0
+
+    # The track lands in the library.
+    with db_conn(db) as conn:
+        insert_track(conn, "pkLate", normalized_title=norm_title, normalized_artist=norm_artist)
+
+    linked = relink_unmatched_listens(db_path=db)
+    assert linked == 2  # both scrobbles of the now-present track
+
+    with db_conn(db) as conn:
+        rows = conn.execute(
+            "SELECT track_pk FROM listens WHERE track_name = 'Late Track'"
+        ).fetchall()
+        assert all(r["track_pk"] == "pkLate" for r in rows)
+        still = conn.execute(
+            "SELECT track_pk FROM listens WHERE track_name = 'Never Match'"
+        ).fetchone()
+        assert still["track_pk"] is None
+
+    # Re-run is a no-op.
+    assert relink_unmatched_listens(db_path=db) == 0
 
 
 def test_metrics_snapshot_writes_row(db):

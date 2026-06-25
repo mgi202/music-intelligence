@@ -72,6 +72,39 @@ def resolve_track_pk(
     return None
 
 
+def relink_unmatched_listens(db_path: str | None = None) -> int:
+    """Re-resolve listens left unmatched at import time (track_pk IS NULL).
+
+    `resolve_track_pk` only runs at import time and the per-source watermark
+    stops old scrobbles being re-fetched, so a listen whose track lands in the
+    library *after* it was imported would otherwise never link. This sweep
+    re-resolves every distinct unmatched (recording_mbid, artist, track) key and
+    bulk-updates the matching rows. Benefits all sources (lastfm, ytm_history,
+    listenbrainz). Idempotent — a linked row no longer matches the NULL filter,
+    so re-running is a no-op. Returns the number of listen rows newly linked.
+    """
+    linked = 0
+    with db_conn(db_path) as conn:
+        # Resolve per distinct track, not per listen row (far fewer distinct keys).
+        keys = conn.execute(
+            "SELECT DISTINCT recording_mbid, artist_name, track_name "
+            "FROM listens WHERE track_pk IS NULL"
+        ).fetchall()
+        for k in keys:
+            pk = resolve_track_pk(conn, k["recording_mbid"], k["track_name"], k["artist_name"])
+            if pk is None:
+                continue
+            cur = conn.execute(
+                "UPDATE listens SET track_pk = ? WHERE track_pk IS NULL "
+                "AND IFNULL(recording_mbid, '') = IFNULL(?, '') "
+                "AND IFNULL(artist_name, '') = IFNULL(?, '') "
+                "AND IFNULL(track_name, '') = IFNULL(?, '')",
+                (pk, k["recording_mbid"], k["artist_name"], k["track_name"]),
+            )
+            linked += cur.rowcount
+    return linked
+
+
 def _max_listened_at(conn: sqlite3.Connection, source: str) -> int:
     row = conn.execute(
         "SELECT MAX(listened_at) AS m FROM listens WHERE source = ?", (source,)

@@ -40,6 +40,7 @@ def snapshot_metrics(db_path: str | None = None) -> dict:
         rated = scalar("SELECT COUNT(*) FROM tracks WHERE personal_rating IS NOT NULL")
         missing = scalar("SELECT COUNT(*) FROM tracks WHERE missing_since IS NOT NULL")
         listens_total = scalar("SELECT COUNT(*) FROM listens")
+        listens_matched = scalar("SELECT COUNT(*) FROM listens WHERE track_pk IS NOT NULL")
 
         by_status = {
             r["match_status"]: r["n"]
@@ -63,6 +64,7 @@ def snapshot_metrics(db_path: str | None = None) -> dict:
             "rated": rated,
             "missing_from_platform": missing,
             "listens_total": listens_total,
+            "listens_matched": listens_matched,
             "by_status": by_status,
             "by_source": by_source,
         }
