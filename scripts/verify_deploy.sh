@@ -132,7 +132,7 @@ if command -v tailscale >/dev/null 2>&1; then
     else
       warn "tailscale serve not configured — run: tailscale serve --bg http://localhost:8080"
     fi
-    if tailscale funnel status 2>/dev/null | grep -q 8080; then
+    if tailscale serve status -json 2>/dev/null | grep -q '"AllowFunnel"'; then
       fail "FUNNEL ACTIVE on 8080 — app is PUBLIC. Disable immediately: tailscale funnel off"
     fi
   else
