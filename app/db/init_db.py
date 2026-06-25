@@ -107,6 +107,42 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         )
         print("Migration applied (v3): listens.source")
 
+    # ── Schema v4 (2026-06-25): widen listens.source CHECK to allow 'lastfm'.
+    # SQLite can't ALTER a CHECK in place, so rebuild the table. Guarded on the
+    # stored DDL not already mentioning 'lastfm', so a second run (or a fresh
+    # DB whose schema.sql already has it) is a no-op.
+    listens_ddl = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='listens'"
+    ).fetchone()
+    if listens_ddl and listens_ddl["sql"] and "'lastfm'" not in listens_ddl["sql"]:
+        conn.executescript(
+            """
+            CREATE TABLE listens_new (
+                listen_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                listened_at     INTEGER NOT NULL,
+                track_pk        TEXT,
+                recording_msid  TEXT, recording_mbid TEXT,
+                track_name      TEXT, artist_name TEXT,
+                raw_json        TEXT,
+                source          TEXT NOT NULL DEFAULT 'listenbrainz'
+                    CHECK (source IN ('listenbrainz','ytm_history','lastfm')),
+                created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(listened_at, recording_msid)
+            );
+            INSERT INTO listens_new
+                (listen_id, listened_at, track_pk, recording_msid, recording_mbid,
+                 track_name, artist_name, raw_json, source, created_at)
+            SELECT
+                listen_id, listened_at, track_pk, recording_msid, recording_mbid,
+                track_name, artist_name, raw_json, source, created_at
+            FROM listens;
+            DROP TABLE listens;
+            ALTER TABLE listens_new RENAME TO listens;
+            CREATE INDEX IF NOT EXISTS idx_listens_track ON listens(track_pk);
+            """
+        )
+        print("Migration applied (v4): listens.source widened to allow 'lastfm'")
+
 
 def _run_backfills(conn: sqlite3.Connection) -> None:
     """Idempotent data backfills, run after schema.sql.

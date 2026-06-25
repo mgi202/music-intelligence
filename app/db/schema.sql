@@ -409,7 +409,7 @@ CREATE TABLE IF NOT EXISTS track_labels (
 );
 
 -- ─────────────────────────────────────────
--- Listens (schema v2; ListenBrainz + YTM history)
+-- Listens (schema v2; ListenBrainz + YTM history + Last.fm)
 -- ─────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS listens (
     listen_id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -419,8 +419,9 @@ CREATE TABLE IF NOT EXISTS listens (
     track_name      TEXT, artist_name TEXT,
     raw_json        TEXT,
     -- Source attribution (v3): which surface the listen came from.
+    -- v4 (2026-06-25): added 'lastfm' for the Last.fm scrobble backfill.
     source          TEXT NOT NULL DEFAULT 'listenbrainz'
-        CHECK (source IN ('listenbrainz','ytm_history')),
+        CHECK (source IN ('listenbrainz','ytm_history','lastfm')),
     created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(listened_at, recording_msid)
 );

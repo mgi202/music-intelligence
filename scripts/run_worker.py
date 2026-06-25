@@ -120,6 +120,7 @@ def run_pass() -> None:
     # ── 4. Listens import (env-gated) ──
     try:
         from app.enrichment.listens_import import (
+            import_lastfm_listens,
             import_listenbrainz_listens,
             import_ytm_history,
         )
@@ -130,6 +131,13 @@ def run_pass() -> None:
             logger.info("Listens import (ListenBrainz): %d new", n)
         else:
             logger.info("Listens import skipped — LISTENBRAINZ_USER not set")
+
+        lfm_user = os.getenv("LASTFM_USER", "")
+        if lfm_user:
+            n = import_lastfm_listens(lfm_user)
+            logger.info("Listens import (Last.fm): %d new", n)
+        else:
+            logger.info("Listens import (Last.fm) skipped — LASTFM_USER not set")
 
         if adapter is not None:
             try:

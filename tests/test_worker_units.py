@@ -1,7 +1,15 @@
 """Worker stage units: listens import, metrics snapshot, prune (RC1 §S10)."""
 
 from app.db.connection import db_conn, get_connection
-from app.enrichment.listens_import import import_listenbrainz_listens
+from app.enrichment.listens_import import (
+    import_lastfm_listens,
+    import_listenbrainz_listens,
+)
+from app.ingestion.normalise import (
+    _unicode_normalise,
+    normalise_artist,
+    normalise_title,
+)
 from app.observability import (
     snapshot_metrics,
     prune_processing_events,
@@ -12,6 +20,100 @@ from tests.conftest import insert_track, iso_days_ago
 
 def _page(listens):
     return {"payload": {"listens": listens}}
+
+
+def _lastfm_track(name, artist, uts=None, mbid="", nowplaying=False):
+    tr = {
+        "name": name,
+        "artist": {"#text": artist, "mbid": ""},
+        "album": {"#text": "Some Album", "mbid": ""},
+        "mbid": mbid,
+    }
+    if nowplaying:
+        tr["@attr"] = {"nowplaying": "true"}
+    else:
+        tr["date"] = {"uts": str(uts), "#text": "01 Jan 2024, 00:00"}
+    return tr
+
+
+def _lastfm_fetch(pages, captured):
+    """Build a network-free getRecentTracks fetcher over `pages` (1-indexed)."""
+    total = len(pages)
+
+    def fetch(url, params, headers):
+        captured.append(dict(params))
+        page = int(params["page"])
+        tracks = pages.get(page, [])
+        return {"recenttracks": {"track": tracks, "@attr": {"totalPages": str(total)}}}
+
+    return fetch
+
+
+def test_lastfm_import_resolves_skips_nowplaying_and_paginates(db, monkeypatch):
+    monkeypatch.setenv("LASTFM_API_KEY", "k")
+    # A library track the "Matched Song" scrobble should resolve to.
+    with db_conn(db) as conn:
+        insert_track(
+            conn,
+            "pk1",
+            normalized_title=_unicode_normalise(normalise_title("Matched Song")),
+            normalized_artist=_unicode_normalise(normalise_artist("Matched Artist")),
+        )
+
+    pages = {
+        1: [
+            _lastfm_track("Live Track", "Now Playing Artist", nowplaying=True),
+            _lastfm_track("Matched Song", "Matched Artist", uts=3000),
+            _lastfm_track("Unmatched Song", "Nobody", uts=2000),
+        ],
+        2: [
+            _lastfm_track("Old Song", "Someone", uts=1000),
+        ],
+    }
+    captured = []
+    fetch = _lastfm_fetch(pages, captured)
+
+    n = import_lastfm_listens("SaintBertie", db_path=db, _fetch=fetch)
+    assert n == 3  # nowplaying skipped; 3 real scrobbles across 2 pages
+
+    with db_conn(db) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM listens WHERE source = 'lastfm'"
+        ).fetchone()[0] == 3
+        matched = conn.execute(
+            "SELECT track_pk FROM listens WHERE track_name = 'Matched Song'"
+        ).fetchone()
+        assert matched["track_pk"] == "pk1"
+        unmatched = conn.execute(
+            "SELECT track_pk FROM listens WHERE track_name = 'Unmatched Song'"
+        ).fetchone()
+        assert unmatched["track_pk"] is None
+
+    # First run starts with no cursor.
+    assert "from" not in captured[0]
+
+
+def test_lastfm_import_idempotent_and_watermark_advances(db, monkeypatch):
+    monkeypatch.setenv("LASTFM_API_KEY", "k")
+    pages = {1: [_lastfm_track("A", "X", uts=3000), _lastfm_track("B", "Y", uts=2000)]}
+    captured = []
+    fetch = _lastfm_fetch(pages, captured)
+
+    n1 = import_lastfm_listens("SaintBertie", db_path=db, _fetch=fetch)
+    assert n1 == 2
+
+    mark = len(captured)
+    n2 = import_lastfm_listens("SaintBertie", db_path=db, _fetch=fetch)
+    assert n2 == 0  # re-run double-counts nothing
+
+    with db_conn(db) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM listens WHERE source = 'lastfm'"
+        ).fetchone()[0] == 2
+
+    # Second run seeds from= with the latest imported scrobble timestamp.
+    run2 = captured[mark:]
+    assert run2 and run2[0]["from"] == 3000
 
 
 def test_listens_import_is_idempotent(db, monkeypatch):

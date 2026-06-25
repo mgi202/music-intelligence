@@ -1,16 +1,18 @@
 """
-Listens import (RC1 §S10.4, extended RC2 §T6.2).
+Listens import (RC1 §S10.4, extended RC2 §T6.2, Last.fm 2026-06-25).
 
-Pulls listening history into the local `listens` table from two sources:
+Pulls listening history into the local `listens` table from three sources:
   - ListenBrainz  (source='listenbrainz') — has real timestamps
   - YTM history   (source='ytm_history')  — no timestamps; import-time stamped
+  - Last.fm       (source='lastfm')        — real scrobble timestamps (UTS)
 
 Each listen is resolved to a library track_pk when possible:
   1. recording_mbid → mbid alias / tracks.musicbrainz_recording_id
   2. normalized artist + title match
 
 Inserts are idempotent: the listens table has UNIQUE(listened_at, recording_msid),
-and YTM-history rows additionally dedup against any source within ±30 minutes.
+and YTM-history / Last.fm rows additionally dedup against other sources within
+±30 minutes (so a play that also appears via another source isn't double-counted).
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
 from datetime import datetime, timezone
 
 import requests
@@ -27,7 +30,11 @@ from app.ingestion.normalise import normalise_artist, normalise_title, _unicode_
 
 _LB_BASE = "https://api.listenbrainz.org/1"
 _PAGE_COUNT = 100
-_YTM_HISTORY_DEDUP_WINDOW_S = 30 * 60  # ±30 min
+_CROSS_SOURCE_DEDUP_WINDOW_S = 30 * 60  # ±30 min — collapse the same play across sources
+
+_LASTFM_BASE = "https://ws.audioscrobbler.com/2.0/"
+_LASTFM_PAGE_COUNT = 200
+_LASTFM_PAGE_SLEEP_S = 0.25  # Last.fm allows ~5 req/s; stay well under
 
 
 def resolve_track_pk(
@@ -142,6 +149,127 @@ def _insert_listen(conn: sqlite3.Connection, li: dict, source: str) -> bool:
     return cur.rowcount > 0
 
 
+def import_lastfm_listens(
+    user: str | None = None,
+    db_path: str | None = None,
+    max_pages: int = 50,
+    _fetch=None,
+) -> int:
+    """Import new Last.fm scrobbles for `user` into the listens table.
+
+    Uses `user.getRecentTracks` (public — needs only the api_key). Incremental
+    via the `from=` UTS cursor seeded from the last imported Last.fm listen;
+    first run (cursor 0) backfills the full history. Returns rows inserted.
+
+    `_fetch(url, params, headers)` is injectable for tests; defaults to a real GET.
+    """
+    user = user or os.getenv("LASTFM_USER", "")
+    if not user:
+        return 0
+    api_key = os.getenv("LASTFM_API_KEY", "")
+    if not api_key:
+        return 0
+
+    fetch = _fetch or _http_get
+    inserted = 0
+    with db_conn(db_path) as conn:
+        from_ts = _max_listened_at(conn, "lastfm")
+        total_pages = None
+        page = 1
+        while page <= max_pages:
+            params = {
+                "method": "user.getRecentTracks",
+                "user": user,
+                "api_key": api_key,
+                "format": "json",
+                "limit": _LASTFM_PAGE_COUNT,
+                "page": page,
+            }
+            if from_ts:
+                params["from"] = from_ts
+            data = fetch(_LASTFM_BASE, params, {})
+            recent = (data or {}).get("recenttracks", {}) or {}
+            tracks = recent.get("track", [])
+            if isinstance(tracks, dict):  # Last.fm collapses a single result to a dict
+                tracks = [tracks]
+            if not tracks:
+                break
+
+            if total_pages is None:
+                try:
+                    total_pages = int((recent.get("@attr") or {}).get("totalPages", 0))
+                except (TypeError, ValueError):
+                    total_pages = 0
+
+            for tr in tracks:
+                if _insert_lastfm_listen(conn, tr):
+                    inserted += 1
+
+            # Last.fm always reports totalPages; paginate by it. Fall back to a
+            # short-page check only when it's missing/unparseable.
+            if total_pages:
+                if page >= total_pages:
+                    break
+            elif len(tracks) < _LASTFM_PAGE_COUNT:
+                break
+            page += 1
+            time.sleep(_LASTFM_PAGE_SLEEP_S)
+    return inserted
+
+
+def _insert_lastfm_listen(conn: sqlite3.Connection, tr: dict) -> bool:
+    """Insert one Last.fm getRecentTracks entry. Returns True if a row was added.
+
+    Skips the "now playing" entry (no timestamp). Last.fm rows carry no
+    recording_msid, so the UNIQUE(listened_at, recording_msid) constraint can't
+    dedup re-imports — we dedup explicitly on (source, listened_at, track), and
+    additionally drop a play that already exists for the same resolved track
+    within ±30 min from a *different* source (cross-source double-count).
+    """
+    attr = tr.get("@attr") or {}
+    if str(attr.get("nowplaying", "")).lower() == "true":
+        return False
+    date = tr.get("date") or {}
+    uts = date.get("uts")
+    if not uts:  # now-playing / malformed — no scrobble timestamp
+        return False
+    ts = int(uts)
+
+    track_name = tr.get("name")
+    artist = tr.get("artist") or {}
+    artist_name = artist.get("#text") if isinstance(artist, dict) else artist
+    recording_mbid = (tr.get("mbid") or "").strip() or None
+    track_pk = resolve_track_pk(conn, recording_mbid, track_name, artist_name)
+
+    # Idempotency: a Last.fm row for this exact scrobble already exists.
+    if conn.execute(
+        "SELECT 1 FROM listens WHERE source = 'lastfm' AND listened_at = ? "
+        "AND IFNULL(track_name, '') = IFNULL(?, '') "
+        "AND IFNULL(artist_name, '') = IFNULL(?, '') LIMIT 1",
+        (ts, track_name, artist_name),
+    ).fetchone():
+        return False
+
+    # Cross-source dedup: same resolved track within ±30 min from another source.
+    if track_pk is not None and conn.execute(
+        "SELECT 1 FROM listens WHERE track_pk = ? AND source != 'lastfm' "
+        "AND ABS(listened_at - ?) <= ? LIMIT 1",
+        (track_pk, ts, _CROSS_SOURCE_DEDUP_WINDOW_S),
+    ).fetchone():
+        return False
+
+    cur = conn.execute(
+        """
+        INSERT OR IGNORE INTO listens
+            (listened_at, track_pk, recording_msid, recording_mbid,
+             track_name, artist_name, raw_json, source)
+        VALUES (?, ?, NULL, ?, ?, ?, ?, 'lastfm')
+        """,
+        (ts, track_pk, recording_mbid, track_name, artist_name, json.dumps(tr)),
+    )
+    return cur.rowcount > 0
+
+
 def import_ytm_history(
     adapter,
     db_path: str | None = None,
@@ -187,7 +315,7 @@ def import_ytm_history(
             if track_pk is not None and conn.execute(
                 "SELECT 1 FROM listens WHERE track_pk = ? "
                 "AND ABS(listened_at - ?) <= ? LIMIT 1",
-                (track_pk, now_ts, _YTM_HISTORY_DEDUP_WINDOW_S),
+                (track_pk, now_ts, _CROSS_SOURCE_DEDUP_WINDOW_S),
             ).fetchone():
                 continue
 
