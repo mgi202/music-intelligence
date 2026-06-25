@@ -42,5 +42,22 @@ services:
       - mis-data:/data
       - ./oauth.json:/config/oauth.json
 
+  # Off-site DB replication to Backblaze B2 (RC1 §S11). ACTIVE — deployed to
+  # music-intel-prod 2026-06-25, verified replicating to bucket
+  # mis-litestream-backups-de (eu-central-003).
+  # Reads /etc/litestream.yml (mounted from ./litestream.yml, gitignored —
+  # contains B2 keys; the host file must be chmod 644 so the container can read
+  # it). user "0:0" is required so litestream can manage the shadow WAL on the
+  # root-owned /data/library.db (the image has no /etc/passwd, so use numeric uid).
+  litestream:
+    image: litestream/litestream
+    container_name: mis-litestream
+    restart: unless-stopped
+    user: "0:0"
+    command: ["replicate"]
+    volumes:
+      - mis-data:/data
+      - ./litestream.yml:/etc/litestream.yml
+
 volumes:
   mis-data:

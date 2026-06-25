@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.DS_Store
+.env
+oauth.json
+data/
+*.db
+*.db-wal
+*.db-shm
+litestream.yml
+.venv/

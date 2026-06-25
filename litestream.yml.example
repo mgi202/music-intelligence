@@ -1,0 +1,22 @@
+# Litestream → Backblaze B2 replication (RC1 §S11.1) — PREPARED, INACTIVE.
+#
+# The SQLite ledger is the system of record; on-disk backups die with the
+# server, so it must replicate off-site. Copy this to litestream.yml and fill
+# in the B2 placeholders, then uncomment the `litestream` service in
+# docker-compose.yml. See DEPLOY.md §6.
+#
+# Create a B2 bucket + application key at backblaze.com first.
+
+dbs:
+  - path: /data/library.db
+    replicas:
+      - type: s3
+        # B2 S3-compatible endpoint — match your bucket's region.
+        endpoint: s3.us-west-004.backblazeb2.com
+        bucket: <YOUR_B2_BUCKET_NAME>
+        path: library.db
+        access-key-id: <YOUR_B2_KEY_ID>
+        secret-access-key: <YOUR_B2_APPLICATION_KEY>
+        # Keep 24h of point-in-time snapshots; retain weekly for 4 weeks.
+        retention: 168h
+        snapshot-interval: 24h
