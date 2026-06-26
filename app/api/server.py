@@ -1003,7 +1003,16 @@ def health():
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    # No-store so the browser never serves a stale cached UI after a deploy —
+    # the single-file app is tiny, and this is what makes updates show up on a
+    # normal reload/reopen instead of needing a hard refresh.
+    return FileResponse(
+        STATIC_DIR / "index.html",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

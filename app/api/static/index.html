@@ -20,6 +20,8 @@
   .searchrow { display: flex; gap: 8px; }
   .searchrow input { flex: 1; background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 9px 12px; border-radius: var(--radius); font-size: 15px; outline: none; }
   .searchrow input:focus { border-color: var(--accent-dim); }
+  .searchrow .refreshbtn { flex-shrink: 0; width: 42px; background: var(--panel2); border: 1px solid #2b2b38; color: var(--accent); border-radius: var(--radius); font-size: 18px; cursor: pointer; }
+  .searchrow .refreshbtn:active { background: var(--panel); }
 
   .chips { display: flex; gap: 6px; overflow-x: auto; padding: 8px 0 2px; scrollbar-width: none; }
   .chips::-webkit-scrollbar { display: none; }
@@ -118,6 +120,7 @@
   /* Filter bar: source-playlist select + AND/OR toggle */
   .filterbar { display: flex; gap: 8px; align-items: center; padding: 6px 0 2px; }
   .filterbar select { flex: 1; min-width: 0; background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 6px 10px; border-radius: 999px; font-size: 12.5px; outline: none; }
+  .filterbar select.sortsel { flex: 0 0 auto; }
   .modebtn { flex-shrink: 0; background: var(--panel2); border: 1px solid var(--accent-dim); color: var(--accent); padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 700; cursor: pointer; letter-spacing: 1px; }
 
   /* Source-playlist chips on a track card */
@@ -157,6 +160,7 @@
   <h1>Music Intelligence <span id="trackcount"></span></h1>
   <div class="searchrow">
     <input id="search" type="search" placeholder="Search title, artist, album…" autocomplete="off">
+    <button class="refreshbtn" id="refreshbtn" title="Reload — fetch the latest app + data" onclick="location.reload()">⟳</button>
   </div>
   <div class="chips" id="ratingchips">
     <div class="chip" data-rating="">All</div>
@@ -169,6 +173,12 @@
   <div class="chips" id="tagchips"></div>
   <div class="filterbar" id="filterbar" style="display:none">
     <select id="srcplaylist"><option value="">All playlists</option></select>
+    <select id="plsort" class="sortsel" title="sort playlists">
+      <option value="name_asc">A–Z</option>
+      <option value="name_desc">Z–A</option>
+      <option value="tracks_asc">Tracks ↑</option>
+      <option value="tracks_desc">Tracks ↓</option>
+    </select>
     <button id="tagmode" class="modebtn" style="display:none">AND</button>
   </div>
   <nav class="tabs">
@@ -210,7 +220,7 @@
 
 <script>
 const state = {
-  q: "", rating: "", tags: [], tagMode: "and", sourcePlaylist: "", inboxPlaylist: "",
+  q: "", rating: "", tags: [], tagMode: "and", sourcePlaylist: "", inboxPlaylist: "", playlistSort: "name_asc",
   offset: 0, limit: 100, total: 0,
   tracks: [], allTags: [], vocab: [], sourcePlaylists: [],
   reviewSub: "duplicates", reviewPairs: [], view: "library",
@@ -676,14 +686,33 @@ async function loadTagChips() {
   else tm.style.display = "none";
 }
 
+// Playlist dropdown ordering (client-side; shared by Library + Inbox).
+function sortedSourcePlaylists() {
+  const s = state.playlistSort;
+  const byName = (a, b) => a.playlist_name.localeCompare(b.playlist_name, undefined, { sensitivity: "base" });
+  return state.sourcePlaylists.slice().sort((a, b) => {
+    if (s === "name_desc") return byName(b, a);
+    if (s === "tracks_asc") return (a.n - b.n) || byName(a, b);
+    if (s === "tracks_desc") return (b.n - a.n) || byName(a, b);
+    return byName(a, b);   // name_asc (default)
+  });
+}
+function playlistOptionsHtml(selected) {
+  return `<option value="">All playlists</option>` + sortedSourcePlaylists().map(p =>
+    `<option value="${esc(p.playlist_id)}" ${selected === p.playlist_id ? "selected" : ""}>${esc(p.playlist_name)} (${p.n})</option>`
+  ).join("");
+}
+function sortOptionsHtml() {
+  return [["name_asc", "A–Z"], ["name_desc", "Z–A"], ["tracks_asc", "Tracks ↑"], ["tracks_desc", "Tracks ↓"]]
+    .map(([v, l]) => `<option value="${v}" ${state.playlistSort === v ? "selected" : ""}>${l}</option>`).join("");
+}
+
 async function loadSourcePlaylists() {
   let pls = [];
   try { pls = await api("/api/source-playlists"); } catch (e) {}
   state.sourcePlaylists = pls;
-  const sel = $("srcplaylist");
-  sel.innerHTML = `<option value="">All playlists</option>` + pls.map(p =>
-    `<option value="${esc(p.playlist_id)}" ${state.sourcePlaylist === p.playlist_id ? "selected" : ""}>${esc(p.playlist_name)} (${p.n})</option>`
-  ).join("");
+  $("srcplaylist").innerHTML = playlistOptionsHtml(state.sourcePlaylist);
+  $("plsort").value = state.playlistSort;
 }
 
 async function loadStats() {
@@ -758,15 +787,15 @@ async function loadInbox() {
   const badge = $("inboxbadge");
   if (data.total) { badge.textContent = data.total; badge.style.display = ""; }
   else badge.style.display = "none";
-  const filter = `<div class="filterbar inboxfilter"><select id="inboxplaylist">
-      <option value="">All playlists</option>
-      ${state.sourcePlaylists.map(pl =>
-        `<option value="${esc(pl.playlist_id)}" ${state.inboxPlaylist === pl.playlist_id ? "selected" : ""}>${esc(pl.playlist_name)} (${pl.n})</option>`).join("")}
-    </select></div>`;
+  const filter = `<div class="filterbar inboxfilter">
+      <select id="inboxplaylist">${playlistOptionsHtml(state.inboxPlaylist)}</select>
+      <select id="inboxplsort" class="sortsel" title="sort playlists">${sortOptionsHtml()}</select>
+    </div>`;
   $("inbox").innerHTML = filter + (data.tracks.length
     ? data.tracks.map(t => trackCard(t, { dismiss: true })).join("")
     : '<div class="empty">Inbox zero ✓ — nothing to triage.</div>');
   $("inboxplaylist").onchange = (e) => { state.inboxPlaylist = e.target.value; loadInbox(); };
+  $("inboxplsort").onchange = (e) => { state.playlistSort = e.target.value; loadInbox(); };
 }
 
 // ── Review: sub-tabs (Duplicates / Removed) ──
@@ -882,6 +911,7 @@ $("tab-tags").onclick = () => switchView("tags");
 // AND/OR toggle + source-playlist filter (bound once)
 $("tagmode").onclick = () => { state.tagMode = state.tagMode === "and" ? "or" : "and"; loadTagChips(); loadTracks(); };
 $("srcplaylist").onchange = (e) => { state.sourcePlaylist = e.target.value; loadTracks(); };
+$("plsort").onchange = (e) => { state.playlistSort = e.target.value; loadSourcePlaylists(); };
 
 const VIEWS = ["home", "library", "inbox", "playlists", "review", "tags"];
 function switchView(v) {
