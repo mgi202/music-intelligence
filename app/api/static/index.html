@@ -126,7 +126,7 @@
   .plrow .plname { padding: 2px 4px 2px 8px; cursor: pointer; }
   .plrow .plx { background: none; border: none; color: #6fb6d6; padding: 2px 7px; cursor: pointer; font-size: 12px; line-height: 1; opacity: .65; }
   .plrow .plx:hover { opacity: 1; color: var(--danger); background: #2a1414; }
-  #toast .undobtn { margin-left: 12px; background: #111; color: var(--accent); border: none; border-radius: 6px; padding: 3px 11px; font-weight: 700; cursor: pointer; }
+  #toast .undobtn { margin-left: 12px; background: #111; color: var(--accent); border: none; border-radius: 6px; padding: 3px 11px; font-weight: 700; cursor: pointer; pointer-events: auto; }
   .filterbar.inboxfilter { padding: 2px 0 10px; }
 
   /* Review sub-tabs */
@@ -225,6 +225,7 @@ const esc = (s) => (s || "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','
 let toastTimer;
 function toast(msg) {
   const t = $("toast"); clearTimeout(toastTimer);
+  t.style.pointerEvents = "";   // plain toasts stay click-through
   t.textContent = msg; t.classList.add("show");
   toastTimer = setTimeout(() => t.classList.remove("show"), 1600);
 }
@@ -438,12 +439,14 @@ function undoToast(msg, onUndo) {
   const t = $("toast");
   clearTimeout(toastTimer);   // cancel any pending auto-hide from an earlier toast
   t.innerHTML = `${esc(msg)} <button class="undobtn" id="undobtn">Undo</button>`;
+  t.style.pointerEvents = "auto";   // the toast normally ignores taps — let this one catch them
   t.classList.add("show");
+  const hide = () => { t.classList.remove("show"); t.style.pointerEvents = ""; clearTimeout(toastTimer); };
   $("undobtn").onclick = async () => {
-    t.classList.remove("show"); clearTimeout(toastTimer);
+    hide();
     try { await onUndo(); } catch (e) { alert("Undo failed: " + e.message); }
   };
-  toastTimer = setTimeout(() => t.classList.remove("show"), 6000);
+  toastTimer = setTimeout(hide, 6000);
 }
 
 // Tap a playlist chip's name → filter the current view to that playlist.
