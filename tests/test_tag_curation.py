@@ -236,6 +236,18 @@ def test_record_memberships_resolves_and_delete_replaces(db):
     assert rows == ["pk_a", "pk_c"]
 
 
+def test_inbox_cards_carry_playlist_membership(client, db):
+    # An unrated, untagged, unblocked track lands in the inbox; its YTM
+    # playlist membership must ride along on the card.
+    with db_conn(db) as c:
+        insert_track(c, "pk_a", ytm_track_id="vid_a")  # unrated, no manual tag
+        c.execute("INSERT INTO track_playlist_membership (track_pk, playlist_id, playlist_name) "
+                  "VALUES ('pk_a', 'P1', 'Discover Weekly Archive')")
+    r = client.get("/api/inbox").json()
+    assert r["tracks"][0]["track_pk"] == "pk_a"
+    assert r["tracks"][0]["playlists"][0]["playlist_name"] == "Discover Weekly Archive"
+
+
 def test_api_source_playlist_filter(db):
     from fastapi.testclient import TestClient
     from app.api.server import app

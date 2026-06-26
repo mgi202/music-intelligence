@@ -800,8 +800,23 @@ def inbox(limit: int = Query(100, le=500)):
                                  WHERE tt.track_pk = t.track_pk AND tt.tag_type = 'private_manual')"""
         ).fetchone()[0]
         tracks = [dict(r) for r in rows]
+        pks = [t["track_pk"] for t in tracks]
+        memberships_by_track: dict[str, list] = {pk: [] for pk in pks}
+        if pks:
+            placeholders = ",".join("?" * len(pks))
+            for row in conn.execute(
+                f"""SELECT track_pk, playlist_id, playlist_name
+                    FROM track_playlist_membership
+                    WHERE track_pk IN ({placeholders})
+                    ORDER BY playlist_name COLLATE NOCASE""",
+                pks,
+            ):
+                memberships_by_track[row["track_pk"]].append(
+                    {"playlist_id": row["playlist_id"], "playlist_name": row["playlist_name"]}
+                )
         for t in tracks:
             t["tags"] = []
+            t["playlists"] = memberships_by_track[t["track_pk"]]
         return {"total": total, "tracks": tracks}
     finally:
         conn.close()
