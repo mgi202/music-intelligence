@@ -184,10 +184,15 @@ def run_pass() -> None:
     # ── 6. Prune ──
     try:
         from app.observability import prune_processing_events, prune_playlist_snapshots
+        from app.playlists.source_edit import prune_removal_log
 
         ev = prune_processing_events()
         snaps = prune_playlist_snapshots()
-        logger.info("Prune: %d processing_events, %d playlist_snapshots removed", ev, snaps)
+        removals = prune_removal_log()
+        logger.info(
+            "Prune: %d processing_events, %d playlist_snapshots, %d removal_log removed",
+            ev, snaps, removals,
+        )
     except Exception as e:
         _alert("Prune", e)
 

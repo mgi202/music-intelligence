@@ -169,6 +169,79 @@ def test_record_memberships_stores_set_video_id(db):
     assert row["video_id"] == "vid_a" and row["set_video_id"] == "setA"
 
 
+# ── removal log + persistent undo ────────────────────────────────────────────
+
+def test_remove_logs_and_list_shows_it(db):
+    from app.playlists.source_edit import remove_track_from_playlist, list_recent_removals
+    with db_conn(db) as c:
+        insert_track(c, "pk_a", canonical_title="Track A", canonical_artist="Artist A", ytm_track_id="vid_a")
+        _membership(c, "pk_a", "P1", "Favorite Songs", "vid_a", "setA")
+    r = remove_track_from_playlist("pk_a", "P1", StubYTM(), db_path=db)
+    assert r["removal_id"] > 0
+    log = list_recent_removals(days=14, db_path=db)
+    assert len(log) == 1
+    assert log[0]["track_title"] == "Track A"
+    assert log[0]["playlist_name"] == "Favorite Songs"
+    assert log[0]["kind"] == "single"
+
+
+def test_undo_removal_readds_marks_undone_and_drops_from_list(db):
+    from app.playlists.source_edit import (
+        remove_track_from_playlist, undo_removal, list_recent_removals)
+    with db_conn(db) as c:
+        insert_track(c, "pk_a", ytm_track_id="vid_a")
+        _membership(c, "pk_a", "P1", "Favorite Songs", "vid_a", "setA")
+    stub = StubYTM()
+    rid = remove_track_from_playlist("pk_a", "P1", stub, db_path=db)["removal_id"]
+    out = undo_removal(rid, stub, db_path=db)
+    assert out["undone"] is True
+    assert stub.added == [("P1", ["vid_a"])]          # re-added on YTM
+    # membership row recreated, log row marked undone → gone from the list
+    with db_conn(db) as c:
+        assert c.execute(
+            "SELECT COUNT(*) FROM track_playlist_membership WHERE track_pk='pk_a' AND playlist_id='P1'"
+        ).fetchone()[0] == 1
+    assert list_recent_removals(days=14, db_path=db) == []
+
+
+def test_remove_all_logs_each_playlist_as_kind_all(db):
+    from app.playlists.source_edit import remove_track_from_all_playlists, list_recent_removals
+    with db_conn(db) as c:
+        insert_track(c, "pk_a", ytm_track_id="vid_a")
+        _membership(c, "pk_a", "P1", "A", "vid_a", "s1")
+        _membership(c, "pk_a", "P2", "B", "vid_a", "s2")
+    remove_track_from_all_playlists("pk_a", StubYTM(), db_path=db)
+    log = list_recent_removals(days=14, db_path=db)
+    assert len(log) == 2 and all(r["kind"] == "all" for r in log)
+
+
+def test_prune_removal_log_drops_old(db):
+    from app.playlists.source_edit import prune_removal_log, list_recent_removals
+    import datetime as dt
+    with db_conn(db) as c:
+        insert_track(c, "pk_a", ytm_track_id="vid_a")
+        old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=90)).isoformat()
+        c.execute("INSERT INTO playlist_removal_log "
+                  "(track_pk, playlist_id, playlist_name, source, kind, removed_at) "
+                  "VALUES ('pk_a','P1','Old','ytm','single',?)", (old,))
+    assert prune_removal_log(days=60, db_path=db) == 1
+    assert list_recent_removals(days=90, db_path=db) == []
+
+
+def test_api_removals_list_and_undo(client, db, monkeypatch):
+    import app.api.server as server
+    stub = StubYTM()
+    monkeypatch.setattr(server, "_make_ytm_adapter", lambda: stub)
+    with db_conn(db) as c:
+        insert_track(c, "pk_a", canonical_title="T", canonical_artist="A", ytm_track_id="vid_a")
+        _membership(c, "pk_a", "P1", "Favorite Songs", "vid_a", "setA")
+    rid = client.post("/api/tracks/pk_a/playlists/P1/remove").json()["removal_id"]
+    listing = client.get("/api/removals").json()
+    assert [x["id"] for x in listing] == [rid]
+    assert client.post(f"/api/removals/{rid}/undo").json()["undone"] is True
+    assert client.get("/api/removals").json() == []   # gone after undo
+
+
 def test_adapter_captures_set_video_id():
     from app.ingestion.ytm_adapter import YouTubeMusicAdapter
 

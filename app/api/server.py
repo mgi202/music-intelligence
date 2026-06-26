@@ -446,6 +446,25 @@ def add_track_to_playlist(track_pk: str, playlist_id: str, body: AddToPlaylistRe
         raise HTTPException(502, f"Couldn't re-add to this playlist on YTM ({e})")
 
 
+@app.get("/api/removals")
+def list_removals(days: int = Query(14, ge=1, le=90)):
+    """Recent playlist removals not yet re-added (the persistent undo history)."""
+    from app.playlists import source_edit
+    return source_edit.list_recent_removals(days=days)
+
+
+@app.post("/api/removals/{removal_id}/undo")
+def undo_removal(removal_id: int):
+    """Re-add a logged removal back to its playlist (toast Undo + Review list)."""
+    from app.playlists import source_edit
+    try:
+        return source_edit.undo_removal(removal_id, _make_ytm_adapter())
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"Couldn't re-add to this playlist on YTM ({e})")
+
+
 # ─────────────────────────────────────────
 # Playlist rules
 # ─────────────────────────────────────────

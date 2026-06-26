@@ -129,6 +129,11 @@
   #toast .undobtn { margin-left: 12px; background: #111; color: var(--accent); border: none; border-radius: 6px; padding: 3px 11px; font-weight: 700; cursor: pointer; }
   .filterbar.inboxfilter { padding: 2px 0 10px; }
 
+  /* Review sub-tabs */
+  nav.subtabs { display: flex; gap: 4px; margin-bottom: 10px; border-bottom: 1px solid #23232e; }
+  nav.subtabs button { background: none; border: none; color: var(--dim); padding: 8px 14px; font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent; }
+  nav.subtabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+
   /* Auto-tag reject affordance: auto tags carry a faint × on the right */
   .tagrow .tag.auto { cursor: pointer; }
   .tagrow .tag.auto::after { content: " ×"; opacity: .4; }
@@ -207,16 +212,21 @@
 const state = {
   q: "", rating: "", tags: [], tagMode: "and", sourcePlaylist: "", inboxPlaylist: "",
   offset: 0, limit: 100, total: 0,
-  tracks: [], allTags: [], vocab: [], sourcePlaylists: [], view: "library",
+  tracks: [], allTags: [], vocab: [], sourcePlaylists: [],
+  reviewSub: "duplicates", reviewPairs: [], view: "library",
   isMobile: /Android|iPhone|iPad/i.test(navigator.userAgent),
 };
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => (s || "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
+// One shared timer so a quick toast (e.g. "Removing…") can't auto-hide a later
+// toast/undo that replaced it. Both toast() and undoToast() clear it first.
+let toastTimer;
 function toast(msg) {
-  const t = $("toast"); t.textContent = msg; t.classList.add("show");
-  setTimeout(() => t.classList.remove("show"), 1600);
+  const t = $("toast"); clearTimeout(toastTimer);
+  t.textContent = msg; t.classList.add("show");
+  toastTimer = setTimeout(() => t.classList.remove("show"), 1600);
 }
 
 async function api(path, opts) {
@@ -424,17 +434,16 @@ function refreshActiveView() {
   else if (state.view === "home") loadHome();
 }
 
-let undoTimer;
 function undoToast(msg, onUndo) {
   const t = $("toast");
-  clearTimeout(undoTimer);
+  clearTimeout(toastTimer);   // cancel any pending auto-hide from an earlier toast
   t.innerHTML = `${esc(msg)} <button class="undobtn" id="undobtn">Undo</button>`;
   t.classList.add("show");
   $("undobtn").onclick = async () => {
-    t.classList.remove("show"); clearTimeout(undoTimer);
+    t.classList.remove("show"); clearTimeout(toastTimer);
     try { await onUndo(); } catch (e) { alert("Undo failed: " + e.message); }
   };
-  undoTimer = setTimeout(() => t.classList.remove("show"), 6000);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 6000);
 }
 
 // Tap a playlist chip's name → filter the current view to that playlist.
@@ -453,8 +462,7 @@ async function removeFromPlaylist(pk, playlistId) {
                         { method: "POST", body: "{}" });
     refreshActiveView();
     undoToast(`Removed from ${r.playlist_name}`, async () => {
-      await api(`/api/tracks/${pk}/playlists/${encodeURIComponent(playlistId)}/add`,
-                { method: "POST", body: JSON.stringify({ playlist_name: r.playlist_name }) });
+      await api(`/api/removals/${r.removal_id}/undo`, { method: "POST", body: "{}" });
       refreshActiveView(); toast("Re-added");
     });
   } catch (e) { alert("Remove failed: " + e.message); }
@@ -758,13 +766,26 @@ async function loadInbox() {
   $("inboxplaylist").onchange = (e) => { state.inboxPlaylist = e.target.value; loadInbox(); };
 }
 
-// ── Review queue: dedup pairs (S8) ──
+// ── Review: sub-tabs (Duplicates / Removed) ──
 async function loadReview() {
-  const pairs = await api("/api/dedup");
+  state.reviewPairs = await api("/api/dedup").catch(() => []);
   const badge = $("reviewbadge");
-  if (pairs.length) { badge.textContent = pairs.length; badge.style.display = ""; }
+  if (state.reviewPairs.length) { badge.textContent = state.reviewPairs.length; badge.style.display = ""; }
   else badge.style.display = "none";
-  $("review").innerHTML = pairs.length ? pairs.map(p => {
+  const sub = state.reviewSub || "duplicates";
+  $("review").innerHTML = `<nav class="subtabs">
+      <button id="sub-dup" class="${sub === "duplicates" ? "active" : ""}">Duplicates${state.reviewPairs.length ? ` <span class="badge">${state.reviewPairs.length}</span>` : ""}</button>
+      <button id="sub-rem" class="${sub === "removed" ? "active" : ""}">Removed</button>
+    </nav><div id="subcontent"></div>`;
+  $("sub-dup").onclick = () => { state.reviewSub = "duplicates"; loadReview(); };
+  $("sub-rem").onclick = () => { state.reviewSub = "removed"; loadReview(); };
+  if (sub === "duplicates") renderDuplicates();
+  else loadRemoved();
+}
+
+function renderDuplicates() {
+  const pairs = state.reviewPairs || [];
+  $("subcontent").innerHTML = pairs.length ? pairs.map(p => {
     const side = (t) => t ? `<div style="flex:1;min-width:0">
         <div class="title">${esc(t.canonical_title)}</div>
         <div class="artist">${esc(t.canonical_artist)}${t.album_title ? " · " + esc(t.album_title) : ""}</div>
@@ -780,6 +801,26 @@ async function loadReview() {
     </div>`;
   }).join("") : '<div class="empty">No pending duplicate pairs.</div>';
 }
+
+async function loadRemoved() {
+  let removals = [];
+  try { removals = await api("/api/removals?days=14"); } catch (e) {}
+  $("subcontent").innerHTML = removals.length
+    ? `<div class="stats">Removed from your YTM playlists in the last 14 days — tap Re-add to put one back.</div>`
+      + removals.map(rm => `<div class="pl">
+          <div class="name">${esc(rm.track_title || rm.track_pk)}</div>
+          <div class="sub">${esc(rm.track_artist || "")} · removed from <b style="color:#6fb6d6">${esc(rm.playlist_name)}</b>${rm.kind === "all" ? " (remove-all)" : ""} · ${rm.removed_at.slice(0,16).replace("T"," ")}</div>
+          <div class="actions"><button class="primary" onclick="undoRemoval(${rm.id})">Re-add</button></div>
+        </div>`).join("")
+    : '<div class="empty">Nothing removed in the last 14 days.</div>';
+}
+
+async function undoRemoval(id) {
+  toast("Re-adding…");
+  try { await api(`/api/removals/${id}/undo`, { method: "POST", body: "{}" }); toast("Re-added ✓"); loadRemoved(); }
+  catch (e) { alert("Re-add failed: " + e.message); }
+}
+
 async function mergePair(id) {
   if (!confirm("Merge these two tracks? The newer one is folded into the older.")) return;
   await api(`/api/dedup/${id}/merge`, { method: "POST", body: "{}" });

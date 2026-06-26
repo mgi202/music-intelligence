@@ -510,6 +510,30 @@ CREATE INDEX IF NOT EXISTS idx_tpm_playlist ON track_playlist_membership(playlis
 CREATE INDEX IF NOT EXISTS idx_tpm_track    ON track_playlist_membership(track_pk);
 
 -- ─────────────────────────────────────────
+-- Playlist removal log (FE hardening, 2026-06-26)
+--
+-- Every write-back removal (single chip × or remove-from-all) is logged here so
+-- the user can re-add a track they culled days ago, not just via the 6s toast.
+-- video_id/set_video_id are kept so a re-add can also restore the item handle.
+-- undone_at is stamped when re-added (from the toast OR the Review list — both
+-- go through the same undo path). Retention-pruned by the worker.
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS playlist_removal_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    track_pk      TEXT NOT NULL,
+    playlist_id   TEXT NOT NULL,
+    playlist_name TEXT NOT NULL,
+    video_id      TEXT,
+    set_video_id  TEXT,
+    source        TEXT NOT NULL DEFAULT 'ytm',
+    kind          TEXT NOT NULL DEFAULT 'single' CHECK (kind IN ('single','all')),
+    removed_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    undone_at     TEXT,
+    FOREIGN KEY (track_pk) REFERENCES tracks(track_pk) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_removal_log_removed ON playlist_removal_log(removed_at);
+
+-- ─────────────────────────────────────────
 -- effective_track_tags — the canonical, user-facing tag set per track.
 -- Applies, in order: alias fold → global hide → per-track reject → dedup
 -- (collapsing the same tag arriving from multiple sources, which is what
