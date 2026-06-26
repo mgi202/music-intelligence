@@ -325,6 +325,21 @@ def reference_readiness():
     return {"profiles": [reference_manager.profile_readiness(pid) for pid in ids]}
 
 
+@app.get("/api/reference/profiles")
+def reference_profiles():
+    """The profile vocabulary, grouped-friendly (id, tag_name, layer). Powers the
+    tap-palette in the tag box so tagging is recognition, not recall."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT profile_id, tag_name, taxonomy_layer, description "
+            "FROM tag_profiles ORDER BY taxonomy_layer, tag_name"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {"profiles": [dict(r) for r in rows]}
+
+
 @app.get("/api/tags")
 def list_all_tags():
     """Distinct EFFECTIVE tags with track counts. Powers filter chips and the

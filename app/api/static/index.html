@@ -111,6 +111,25 @@
   .menu .sheet button.danger { color: var(--danger); }
   .menu .sheet .menuhint { padding: 8px 14px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); }
   .menu .sheet .menusep { height: 1px; background: #2b2b38; margin: 6px 8px; }
+  /* Training (reference-readiness) view */
+  .trainhead { font-size: 13px; color: var(--dim); margin: 4px 2px 12px; }
+  .trainhead b { color: var(--text); }
+  .pcard { background: var(--panel); border: 1px solid #23232e; border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+  .pcard .ptop { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .pcard .pname { font-size: 14px; font-weight: 600; color: var(--text); }
+  .pcard .pill { font-size: 11px; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+  .pill.ready { background: #16351f; color: #6ee7a0; border: 1px solid #1f5130; }
+  .pill.wip { background: var(--panel2); color: var(--dim); border: 1px solid #2b2b38; }
+  .pbar { margin-top: 9px; }
+  .pbar .plabel { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--dim); margin-bottom: 3px; }
+  .pbar .ptrack { height: 7px; background: var(--panel2); border-radius: 999px; overflow: hidden; }
+  .pbar .pfill { height: 100%; background: var(--accent); border-radius: 999px; transition: width .3s; }
+  .pbar .pfill.done { background: #3fae6a; }
+  /* Tag tap-palette in the add-tag modal */
+  .playlbl { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); margin: 10px 2px 4px; }
+  .palette-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .palette-row .chip { flex-shrink: 1; }
+  .palette-row .chip[disabled] { opacity: .5; }
 
   /* Evidence + health */
   .evidence { background: var(--panel2); border-radius: 8px; padding: 10px; margin-top: 8px; font-size: 12px; }
@@ -190,6 +209,7 @@
     <button id="tab-playlists">Playlists</button>
     <button id="tab-review">Review <span id="reviewbadge" class="badge" style="display:none"></span></button>
     <button id="tab-tags">Tags</button>
+    <button id="tab-training">Training</button>
   </nav>
 </header>
 
@@ -205,6 +225,7 @@
   <div id="playlists" style="display:none"></div>
   <div id="review" style="display:none"></div>
   <div id="tags" style="display:none"></div>
+  <div id="training" style="display:none"></div>
 </main>
 
 <div id="playerbar">
@@ -402,43 +423,82 @@ async function rate(pk, rating) {
   if (state.view !== "inbox") loadInbox();
 }
 
+// Layer display order + labels for the tap-palette.
+const LAYER_ORDER = ["subgenre", "functional", "personal", "family"];
+const LAYER_LABEL = { subgenre: "Subgenre", functional: "Function (set role)", personal: "Personal", family: "Family" };
+
 async function addTag(pk) {
   if (!state.allTags.length) { try { state.allTags = await api("/api/tags"); } catch (e) {} }
-  // Profile names first, flagged — tagging with one of these auto-creates a
-  // training example, so nudge toward them without forcing it.
-  if (!state.profiles) {
-    try { state.profiles = (await api("/api/reference/readiness")).profiles || []; }
-    catch (e) { state.profiles = []; }
+  // The profile vocabulary = your tap-palette. Recognition, not recall: tap a
+  // chip to add/remove. No spelling drift, guaranteed to map to a profile.
+  if (!state.profileList) {
+    try { state.profileList = (await api("/api/reference/profiles")).profiles || []; }
+    catch (e) { state.profileList = []; }
   }
-  const profOpts = state.profiles
-    .map(p => `<option value="${esc(p.profile_id)}" label="★ teaches a profile">`).join("");
-  const opts = state.allTags.map(t => `<option value="${esc(t.tag)}">`).join("");
+  const t = (state.tracks.concat(state.inbox || [])).find(x => x.track_pk === pk) || {};
+  const manual = new Set((t.tags || [])
+    .filter(g => g.tag_type === "private_manual").map(g => g.tag.toLowerCase()));
+
+  const opts = state.allTags.map(x => `<option value="${esc(x.tag)}">`).join("");
   const bg = document.createElement("div");
   bg.className = "modal-bg";
-  bg.onclick = (ev) => { if (ev.target === bg) bg.remove(); };
+  let changed = false;
+  const close = () => { bg.remove(); if (changed) { loadTracks(); loadTagChips(); } };
+  bg.onclick = (ev) => { if (ev.target === bg) close(); };
+
   bg.innerHTML = `<div class="modal">
-    <h2>Add tag</h2>
-    <input id="tag-input" list="tag-suggest" placeholder="start typing… e.g. dub-techno" autocomplete="off" autocapitalize="none">
-    <datalist id="tag-suggest">${profOpts}${opts}</datalist>
-    <div class="hint">Tags marked ★ also teach the system a genre example. Any other tag works too.</div>
+    <h2>Tag track</h2>
+    <div id="palette"></div>
+    <div class="hint" style="margin-top:10px">Or type a free-text tag (descriptive only — won't teach a profile):</div>
+    <input id="tag-input" list="tag-suggest" placeholder="e.g. raw, hardware-jam" autocomplete="off" autocapitalize="none">
+    <datalist id="tag-suggest">${opts}</datalist>
     <div class="btnrow">
-      <button onclick="this.closest('.modal-bg').remove()">Cancel</button>
-      <button class="primary" id="tag-save">Add</button>
+      <button class="primary" id="tag-done">Done</button>
     </div>
   </div>`;
   document.body.appendChild(bg);
-  const input = bg.querySelector("#tag-input");
-  input.focus();
-  const submit = async () => {
-    const tag = input.value.trim();
-    if (!tag) return;
-    await api(`/api/tracks/${pk}/tags`, { method: "POST", body: JSON.stringify({ tag }) });
-    bg.remove();
-    await loadTracks(); loadTagChips();
-    toast(`Tagged: ${tag.toLowerCase()}`);
+
+  // ── Palette ──────────────────────────────────────────────────────────────
+  const palette = bg.querySelector("#palette");
+  const byLayer = {};
+  state.profileList.forEach(p => { (byLayer[p.taxonomy_layer] ||= []).push(p); });
+  const renderPalette = () => {
+    palette.innerHTML = LAYER_ORDER.filter(l => byLayer[l]).map(layer => {
+      const chips = byLayer[layer].map(p => {
+        const on = manual.has(p.tag_name.toLowerCase());
+        return `<button class="chip ${on ? "active" : ""}" data-tag="${esc(p.tag_name)}">${on ? "✓ " : ""}${esc(p.tag_name)}</button>`;
+      }).join("");
+      return `<div class="playlbl">${LAYER_LABEL[layer] || layer}</div><div class="palette-row">${chips}</div>`;
+    }).join("") || '<div class="hint">No profiles seeded yet.</div>';
   };
-  bg.querySelector("#tag-save").onclick = submit;
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+  renderPalette();
+
+  palette.onclick = async (ev) => {
+    const btn = ev.target.closest(".chip"); if (!btn) return;
+    const tag = btn.dataset.tag, key = tag.toLowerCase();
+    btn.disabled = true;
+    try {
+      if (manual.has(key)) {
+        await api(`/api/tracks/${pk}/tags/${encodeURIComponent(tag)}`, { method: "DELETE" });
+        manual.delete(key); toast(`Removed: ${key}`);
+      } else {
+        await api(`/api/tracks/${pk}/tags`, { method: "POST", body: JSON.stringify({ tag }) });
+        manual.add(key); toast(`Tagged: ${key}`);
+      }
+      changed = true; renderPalette();
+    } catch (e) { toast("Failed — try again"); btn.disabled = false; }
+  };
+
+  // ── Free-text escape hatch ───────────────────────────────────────────────
+  const input = bg.querySelector("#tag-input");
+  const submitFree = async () => {
+    const tag = input.value.trim(); if (!tag) return;
+    await api(`/api/tracks/${pk}/tags`, { method: "POST", body: JSON.stringify({ tag }) });
+    manual.add(tag.toLowerCase()); changed = true; input.value = "";
+    renderPalette(); toast(`Tagged: ${tag.toLowerCase()}`);
+  };
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") submitFree(); });
+  bg.querySelector("#tag-done").onclick = close;
 }
 
 async function removeTag(pk, tag) {
@@ -945,13 +1005,14 @@ $("tab-inbox").onclick = () => switchView("inbox");
 $("tab-playlists").onclick = () => switchView("playlists");
 $("tab-review").onclick = () => switchView("review");
 $("tab-tags").onclick = () => switchView("tags");
+$("tab-training").onclick = () => switchView("training");
 
 // AND/OR toggle + source-playlist filter (bound once)
 $("tagmode").onclick = () => { state.tagMode = state.tagMode === "and" ? "or" : "and"; loadTagChips(); loadTracks(); };
 $("srcplaylist").onchange = (e) => { state.sourcePlaylist = e.target.value; loadTracks(); };
 $("plsort").onchange = (e) => { state.playlistSort = e.target.value; loadSourcePlaylists(); };
 
-const VIEWS = ["home", "library", "inbox", "playlists", "review", "tags"];
+const VIEWS = ["home", "library", "inbox", "playlists", "review", "tags", "training"];
 function switchView(v) {
   state.view = v;
   VIEWS.forEach(name => {
@@ -967,6 +1028,48 @@ function switchView(v) {
   if (v === "playlists") loadPlaylists();
   if (v === "review") loadReview();
   if (v === "tags") loadTags();
+  if (v === "training") loadTraining();
+}
+
+// ── Training view: per-profile progress toward the kNN auto-apply gate ──
+// Each profile needs 15 positives, 15 negatives-or-near-misses, and 3 distinct
+// artists among its positives before it can auto-classify. All derived from
+// your tags — this is just the read-out.
+async function loadTraining() {
+  const el = $("training");
+  el.innerHTML = '<div class="trainhead">Loading…</div>';
+  let data;
+  try { data = await api("/api/reference/readiness"); }
+  catch (e) { el.innerHTML = '<div class="empty">Couldn\'t load training status.</div>'; return; }
+  const profiles = data.profiles || [];
+  const ready = profiles.filter(p => p.ready).length;
+  const anyData = profiles.some(p => p.positive || p.negative_plus_near_miss);
+
+  const bar = (label, have, need) => {
+    const pct = Math.min(100, Math.round((have / need) * 100));
+    const done = have >= need;
+    return `<div class="pbar">
+      <div class="plabel"><span>${label}</span><span>${have} / ${need}</span></div>
+      <div class="ptrack"><div class="pfill ${done ? "done" : ""}" style="width:${pct}%"></div></div>
+    </div>`;
+  };
+
+  const cards = profiles.map(p => {
+    const pill = p.ready
+      ? '<span class="pill ready">✓ ready</span>'
+      : `<span class="pill wip">in progress</span>`;
+    return `<div class="pcard">
+      <div class="ptop"><span class="pname">${esc(p.profile_id)}</span>${pill}</div>
+      ${bar("Positives", p.positive, 15)}
+      ${bar("Negatives + near-miss", p.negative_plus_near_miss, 15)}
+      ${bar("Distinct artists", p.distinct_positive_artists, 3)}
+    </div>`;
+  }).join("");
+
+  const intro = anyData
+    ? `<b>${ready}</b> of ${profiles.length} profiles ready to auto-classify.`
+    : `No examples yet. Open a track, hit <b>+ tag</b>, and tap a profile chip — these bars fill in as you go. Each profile needs 15 positives, 15 negatives/near-misses, and 3 different artists.`;
+  el.innerHTML = `<div class="trainhead">${intro}</div>${cards}`;
 }
 
 document.querySelector('#ratingchips .chip[data-rating=""]').classList.add("active");

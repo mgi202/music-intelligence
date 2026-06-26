@@ -353,3 +353,17 @@ def test_api_source_playlist_filter(db):
     # source-playlists listing
     pls = client.get("/api/source-playlists").json()
     assert pls[0]["playlist_id"] == "P1" and pls[0]["n"] == 1
+
+
+def test_api_reference_profiles_vocabulary(client, db):
+    """GET /api/reference/profiles returns the seeded profile vocabulary with a
+    taxonomy_layer, grouped-friendly for the tap-palette."""
+    from app.playlists.utility import seed_starter_tag_profiles
+    seed_starter_tag_profiles(db)
+    rows = client.get("/api/reference/profiles").json()["profiles"]
+    assert len(rows) == 10
+    layers = [r["taxonomy_layer"] for r in rows]
+    assert layers == sorted(layers)  # ordered by layer for grouping
+    from collections import Counter
+    assert Counter(layers) == {"functional": 5, "personal": 3, "subgenre": 2}
+    assert all({"profile_id", "tag_name", "taxonomy_layer", "description"} <= r.keys() for r in rows)
