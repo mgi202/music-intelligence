@@ -84,7 +84,7 @@ class PlaylistRuleRequest(BaseModel):
 
 @app.get("/api/tracks")
 def list_tracks(
-    q: Optional[str] = Query(None, description="Search title/artist/album"),
+    q: Optional[str] = Query(None, description="Search title/artist/album/tag"),
     tag: Optional[str] = Query(None, description="Single tag (legacy)"),
     tags: Optional[str] = Query(None, description="Comma-separated tags (multi-select)"),
     tag_mode: str = Query("and", pattern="^(and|or)$", description="Combine multiple tags"),
@@ -101,10 +101,16 @@ def list_tracks(
 
     if q:
         like = f"%{q.lower()}%"
+        # Title/artist/album, plus the track's effective tags so typing a genre
+        # or label term in the search bar surfaces tracks carrying that tag.
+        # effective_track_tags already folds aliases and drops hidden/rejected.
         conditions.append(
-            "(LOWER(t.canonical_title) LIKE ? OR LOWER(t.canonical_artist) LIKE ? OR LOWER(COALESCE(t.album_title,'')) LIKE ?)"
+            "(LOWER(t.canonical_title) LIKE ? OR LOWER(t.canonical_artist) LIKE ? "
+            "OR LOWER(COALESCE(t.album_title,'')) LIKE ? "
+            "OR EXISTS (SELECT 1 FROM effective_track_tags tt "
+            "WHERE tt.track_pk = t.track_pk AND LOWER(tt.tag) LIKE ?))"
         )
-        params.extend([like, like, like])
+        params.extend([like, like, like, like])
 
     # Tag filter — single (?tag=) or multi (?tags=a,b&tag_mode=and|or), evaluated
     # against effective_track_tags so hidden/rejected/aliased tags behave exactly

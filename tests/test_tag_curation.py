@@ -367,3 +367,21 @@ def test_api_reference_profiles_vocabulary(client, db):
     from collections import Counter
     assert Counter(layers) == {"functional": 5, "personal": 3, "subgenre": 2}
     assert all({"profile_id", "tag_name", "taxonomy_layer", "description"} <= r.keys() for r in rows)
+
+
+def test_api_search_matches_tags(client, db):
+    """The search bar (q=) matches effective tags, not just title/artist/album —
+    and respects hide/alias via the view."""
+    with db_conn(db) as c:
+        insert_track(c, "a", canonical_title="Untitled", canonical_artist="Anon")
+        _tag(c, "a", "dub-techno", "lastfm")
+        insert_track(c, "b", canonical_title="Other", canonical_artist="Nobody")
+        _tag(c, "b", "ambient", "lastfm")
+    # substring of a tag finds the carrying track
+    r = client.get("/api/tracks?q=dub").json()
+    assert [t["track_pk"] for t in r["tracks"]] == ["a"]
+    # hidden tag drops out of search (view-driven, same as filter chips)
+    assert client.put("/api/vocabulary/dub-techno", json={"hidden": True}).status_code == 200
+    assert client.get("/api/tracks?q=dub").json()["tracks"] == []
+    # title search still works alongside
+    assert [t["track_pk"] for t in client.get("/api/tracks?q=other").json()["tracks"]] == ["b"]
