@@ -57,6 +57,10 @@ class YouTubeMusicAdapter(StreamingPlatformAdapter):
         # Populated by fetch_library_snapshot(): playlist_id -> {"name", "video_ids"}.
         # Lets the worker record source-playlist membership without a second walk.
         self.last_playlist_memberships: dict[str, dict] = {}
+        # True only when the playlist enumeration AND every per-playlist fetch
+        # succeeded this run — gates the stale-membership prune (a partial run
+        # must not prune, or it would wipe a transiently-failing playlist).
+        self.last_snapshot_complete: bool = True
 
     @property
     def client(self):
@@ -98,6 +102,7 @@ class YouTubeMusicAdapter(StreamingPlatformAdapter):
         tokens: list[TrackToken] = []
         seen_video_ids: set[str] = set()
         self.last_playlist_memberships = {}
+        self.last_snapshot_complete = True
 
         def _absorb(raw_items: list[dict]) -> None:
             for item in raw_items or []:
@@ -127,6 +132,7 @@ class YouTubeMusicAdapter(StreamingPlatformAdapter):
         except Exception as e:  # noqa: BLE001 — enumerate failure must not kill ingest
             print(f"Warning: get_library_playlists failed: {e}")
             playlists = []
+            self.last_snapshot_complete = False  # incomplete → no stale prune
 
         for pl in playlists:
             if not self._should_ingest_playlist(pl):
@@ -155,6 +161,7 @@ class YouTubeMusicAdapter(StreamingPlatformAdapter):
                 _absorb(raw_tracks)
             except Exception as e:  # noqa: BLE001 — one playlist failing is non-fatal
                 print(f"Warning: get_playlist({playlist_id}) failed: {e}")
+                self.last_snapshot_complete = False  # a gap → no stale prune
                 continue
 
         return tokens

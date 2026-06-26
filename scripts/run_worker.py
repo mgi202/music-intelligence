@@ -75,10 +75,13 @@ def run_pass() -> None:
         # have resolved to track_pks). Isolated: a failure here never blocks
         # the rest of the ingest stage.
         try:
-            m = record_source_memberships(adapter.last_playlist_memberships)
+            complete = getattr(adapter, "last_snapshot_complete", False)
+            m = record_source_memberships(
+                adapter.last_playlist_memberships, run_complete=complete
+            )
             logger.info(
-                "Source-playlist membership: %d rows across %d playlists",
-                m, len(adapter.last_playlist_memberships),
+                "Source-playlist membership: %d rows across %d playlists (complete=%s, stale pruned=%s)",
+                m, len(adapter.last_playlist_memberships), complete, complete,
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("Source-playlist membership recording failed: %s", e)

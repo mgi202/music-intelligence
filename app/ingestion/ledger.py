@@ -269,6 +269,7 @@ def _resolve_pk_by_video_id(video_id: str, conn: sqlite3.Connection) -> str | No
 def record_source_memberships(
     memberships: dict[str, dict],
     source: str = "ytm",
+    run_complete: bool = False,
     db_path: str | None = None,
 ) -> int:
     """Persist which of the user's own playlists each track currently lives in.
@@ -276,10 +277,24 @@ def record_source_memberships(
     ``memberships`` is the adapter's ``last_playlist_memberships``:
         {playlist_id: {"name": str, "video_ids": set[str]}}
 
-    Delete-replace per playlist so removals on the platform are reflected, while
-    a playlist absent from the map (e.g. it failed to fetch this run) is left
-    untouched. Tracks whose videoId has not yet resolved to a ledger row are
-    skipped — they will be picked up on a later ingest once they land.
+    Two layers of freshness:
+      1. Delete-replace per playlist_id — reflects track add/remove within a
+         still-existing playlist.
+      2. Stale-row prune (only when ``run_complete``) — deletes any ``source``
+         row not refreshed by this run. This is what heals YTM **reassigning a
+         playlistId** between runs: the old id stops being enumerated, its rows
+         keep their old ``last_seen_at``, and the prune removes them so the
+         duplicate chip disappears. Genuinely-distinct same-name playlists are
+         safe — both their ids are refreshed in the same run, so neither is
+         older than the run.
+
+    The prune runs ONLY after a confirmed-complete enumeration (every
+    get_playlist succeeded) — a partial run must not prune or it would wipe a
+    transiently-failing playlist. As a second guard it never prunes on an empty
+    map, so a glitchy empty-but-"complete" enumeration can't wipe everything.
+
+    Tracks whose videoId has not yet resolved to a ledger row are skipped — they
+    are picked up on a later ingest once they land.
 
     Returns the number of membership rows written.
     """
@@ -312,4 +327,12 @@ def record_source_memberships(
                     (pk, playlist_id, name, source, now),
                 )
                 written += 1
+
+        # Stale-row GC — only after a complete, non-empty enumeration.
+        if run_complete:
+            conn.execute(
+                "DELETE FROM track_playlist_membership "
+                "WHERE source = ? AND last_seen_at < ?",
+                (source, now),
+            )
     return written

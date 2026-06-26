@@ -248,6 +248,94 @@ def test_inbox_cards_carry_playlist_membership(client, db):
     assert r["tracks"][0]["playlists"][0]["playlist_name"] == "Discover Weekly Archive"
 
 
+def test_complete_run_prunes_reassigned_playlist_id(db):
+    # YTM reassigns a playlist's id between runs; a complete run must drop the
+    # orphaned old-id rows so the duplicate chip disappears.
+    from app.ingestion.ledger import record_source_memberships
+    with db_conn(db) as c:
+        insert_track(c, "pk_a", ytm_track_id="vid_a")
+    record_source_memberships({"OLD": {"name": "Favorite Songs", "video_ids": {"vid_a"}}}, run_complete=True)
+    record_source_memberships({"NEW": {"name": "Favorite Songs", "video_ids": {"vid_a"}}}, run_complete=True)
+    with db_conn(db) as c:
+        ids = sorted(r["playlist_id"] for r in c.execute(
+            "SELECT DISTINCT playlist_id FROM track_playlist_membership"))
+    assert ids == ["NEW"]
+
+
+def test_incomplete_run_keeps_stale_rows(db):
+    # A partial enumeration must NOT prune — it would wipe a transiently-failing
+    # playlist's membership.
+    from app.ingestion.ledger import record_source_memberships
+    with db_conn(db) as c:
+        insert_track(c, "pk_a", ytm_track_id="vid_a")
+    record_source_memberships({"OLD": {"name": "X", "video_ids": {"vid_a"}}}, run_complete=True)
+    record_source_memberships({"NEW": {"name": "X", "video_ids": {"vid_a"}}}, run_complete=False)
+    with db_conn(db) as c:
+        ids = sorted(r["playlist_id"] for r in c.execute(
+            "SELECT DISTINCT playlist_id FROM track_playlist_membership"))
+    assert ids == ["NEW", "OLD"]
+
+
+def test_complete_run_keeps_genuine_same_name_playlists(db):
+    # Two REAL playlists sharing a display name are refreshed in the same run,
+    # so neither is stale — both survive the prune.
+    from app.ingestion.ledger import record_source_memberships
+    with db_conn(db) as c:
+        insert_track(c, "pk_a", ytm_track_id="vid_a")
+        insert_track(c, "pk_b", ytm_track_id="vid_b")
+    record_source_memberships({
+        "P1": {"name": "House", "video_ids": {"vid_a"}},
+        "P2": {"name": "House", "video_ids": {"vid_b"}},
+    }, run_complete=True)
+    with db_conn(db) as c:
+        ids = sorted(r["playlist_id"] for r in c.execute(
+            "SELECT DISTINCT playlist_id FROM track_playlist_membership"))
+    assert ids == ["P1", "P2"]
+
+
+def test_adapter_marks_incomplete_on_playlist_fetch_failure():
+    from app.ingestion.ytm_adapter import YouTubeMusicAdapter
+
+    def song(v):
+        return {"videoId": v, "title": v, "artists": [{"name": "A"}],
+                "album": {"name": "Al"}, "duration_seconds": 200}
+
+    class FakeClient:
+        def get_library_songs(self, limit=None): return []
+        def get_liked_songs(self, limit=None): return {"tracks": []}
+        def get_library_playlists(self, limit=None):
+            return [{"playlistId": "P1", "title": "OK"}, {"playlistId": "P2", "title": "Bad"}]
+        def get_playlist(self, pid, limit=10000):
+            if pid == "P2":
+                raise RuntimeError("boom")
+            return {"tracks": [song("vid_a")]}
+
+    a = YouTubeMusicAdapter()
+    a._client = FakeClient()
+    a.fetch_library_snapshot()
+    assert a.last_snapshot_complete is False           # a gap → prune suppressed
+    assert "P1" in a.last_playlist_memberships
+    assert "P2" not in a.last_playlist_memberships
+
+
+def test_adapter_marks_complete_on_clean_run():
+    from app.ingestion.ytm_adapter import YouTubeMusicAdapter
+
+    class FakeClient:
+        def get_library_songs(self, limit=None): return []
+        def get_liked_songs(self, limit=None): return {"tracks": []}
+        def get_library_playlists(self, limit=None):
+            return [{"playlistId": "P1", "title": "OK"}]
+        def get_playlist(self, pid, limit=10000):
+            return {"tracks": [{"videoId": "v", "title": "t", "artists": [{"name": "A"}],
+                                "album": {"name": "Al"}, "duration_seconds": 200}]}
+
+    a = YouTubeMusicAdapter()
+    a._client = FakeClient()
+    a.fetch_library_snapshot()
+    assert a.last_snapshot_complete is True
+
+
 def test_api_source_playlist_filter(db):
     from fastapi.testclient import TestClient
     from app.api.server import app
