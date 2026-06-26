@@ -148,15 +148,18 @@ class YouTubeMusicAdapter(StreamingPlatformAdapter):
                 # both library and Discover Weekly Archive must still be recorded
                 # as belonging to the playlist.
                 pl_name = (pl.get("title") or "").strip() or playlist_id
-                vids = {
-                    it.get("videoId")
+                # Capture videoId -> setVideoId. setVideoId is the per-playlist-
+                # item handle YTM needs to remove an item later (write-back).
+                items = {
+                    it["videoId"]: it.get("setVideoId")
                     for it in raw_tracks
                     if isinstance(it, dict) and it.get("videoId")
                 }
-                if vids:
+                if items:
                     self.last_playlist_memberships[playlist_id] = {
                         "name": pl_name,
-                        "video_ids": vids,
+                        "video_ids": set(items),   # back-compat
+                        "items": items,            # videoId -> setVideoId
                     }
                 _absorb(raw_tracks)
             except Exception as e:  # noqa: BLE001 — one playlist failing is non-fatal
@@ -242,6 +245,31 @@ class YouTubeMusicAdapter(StreamingPlatformAdapter):
         )
         normalise_token(token)
         return token
+
+    # ── Source-playlist editing (write-back to the user's own playlists) ───────
+
+    def remove_from_playlist(self, playlist_id: str, items: list[dict]) -> str:
+        """Remove items from one of the user's own YTM playlists.
+
+        ``items`` = [{"videoId": ..., "setVideoId": ...}, ...] — ytmusicapi needs
+        both ids. Raises if the playlist is not editable (YTM-owned/auto
+        playlists, or someone else's saved playlist) — the caller surfaces that
+        as a 'can't edit this playlist' message. Returns ytmusicapi's status
+        string (typically 'STATUS_SUCCEEDED').
+        """
+        if not items:
+            return "STATUS_SUCCEEDED"
+        return self.client.remove_playlist_items(playlist_id, items)
+
+    def add_to_playlist(self, playlist_id: str, video_ids: list[str]) -> dict:
+        """Add videoIds to a playlist (used for one-tap Undo of a removal).
+
+        Returns ytmusicapi's response; when present it carries the new
+        setVideoId(s) under playlistEditResults.
+        """
+        if not video_ids:
+            return {}
+        return self.client.add_playlist_items(playlist_id, video_ids)
 
     # ── Playlist write ────────────────────────────────────────────────────────
 

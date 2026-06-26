@@ -97,6 +97,16 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE playlist_rules ADD COLUMN sync_held_reason TEXT")
         print("Migration applied (v3): playlist_rules.last_synced_hash + sync_held_reason")
 
+    # 2026-06-26: source-playlist write-back needs per-item ids for YTM removal.
+    # The membership table may already exist (deployed 2026-06-26) without these
+    # columns; CREATE TABLE IF NOT EXISTS won't add them, so ALTER here. PRAGMA on
+    # a not-yet-created table returns empty → guarded skip (schema.sql makes it).
+    tpm_cols = {row["name"] for row in conn.execute("PRAGMA table_info(track_playlist_membership)")}
+    if tpm_cols and "set_video_id" not in tpm_cols:
+        conn.execute("ALTER TABLE track_playlist_membership ADD COLUMN video_id TEXT")
+        conn.execute("ALTER TABLE track_playlist_membership ADD COLUMN set_video_id TEXT")
+        print("Migration applied: track_playlist_membership.video_id + set_video_id")
+
     # listens: source attribution (v3). Only relevant if a v2 listens table
     # already exists without the column; fresh installs get it from schema.sql.
     listens_cols = {row["name"] for row in conn.execute("PRAGMA table_info(listens)")}

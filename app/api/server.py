@@ -59,6 +59,16 @@ class VocabRequest(BaseModel):
     alias_to: Optional[str] = None
 
 
+class AddToPlaylistRequest(BaseModel):
+    playlist_name: Optional[str] = None  # for the re-created membership row (undo)
+
+
+def _make_ytm_adapter():
+    """Factory so endpoints get a YTM adapter and tests can monkeypatch it."""
+    from app.ingestion.ytm_adapter import YouTubeMusicAdapter
+    return YouTubeMusicAdapter()
+
+
 class PlaylistRuleRequest(BaseModel):
     playlist_name: str
     rule_json: dict
@@ -391,6 +401,49 @@ def list_source_playlists():
         return [dict(r) for r in rows]
     finally:
         conn.close()
+
+
+# ─────────────────────────────────────────
+# Source-playlist write-back: cull a track from the user's own YTM playlists
+# ─────────────────────────────────────────
+
+@app.post("/api/tracks/{track_pk}/playlists/remove-all")
+def remove_track_from_all(track_pk: str, block: bool = Query(True)):
+    """Remove a track from every owned playlist it's in (one-tap cull). When
+    block=true (default) it's also flagged out of generated playlists so the
+    user's rules don't re-add it."""
+    from app.playlists import source_edit
+    return source_edit.remove_track_from_all_playlists(
+        track_pk, _make_ytm_adapter(), block=block
+    )
+
+
+@app.post("/api/tracks/{track_pk}/playlists/{playlist_id}/remove")
+def remove_track_from_playlist(track_pk: str, playlist_id: str):
+    """Remove a track from one owned YTM playlist."""
+    from app.playlists import source_edit
+    try:
+        return source_edit.remove_track_from_playlist(track_pk, playlist_id, _make_ytm_adapter())
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:  # noqa: BLE001 — YTM refused (likely read-only playlist)
+        raise HTTPException(
+            502, f"Couldn't remove from this playlist — it may be read-only on YTM ({e})"
+        )
+
+
+@app.post("/api/tracks/{track_pk}/playlists/{playlist_id}/add")
+def add_track_to_playlist(track_pk: str, playlist_id: str, body: AddToPlaylistRequest):
+    """Re-add a track to a playlist — the Undo of a removal."""
+    from app.playlists import source_edit
+    try:
+        return source_edit.add_track_to_playlist(
+            track_pk, playlist_id, body.playlist_name, _make_ytm_adapter()
+        )
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"Couldn't re-add to this playlist on YTM ({e})")
 
 
 # ─────────────────────────────────────────
@@ -774,31 +827,38 @@ def wrong_match(track_pk: str):
 
 
 @app.get("/api/inbox")
-def inbox(limit: int = Query(100, le=500)):
+def inbox(
+    limit: int = Query(100, le=500),
+    source_playlist: Optional[str] = Query(None, description="Filter to a YTM source playlist_id"),
+):
     """Tracks in the inbox: unrated, no private_manual tag, not dismissed, not blocked (T5)."""
+    base = (
+        "FROM tracks t "
+        "WHERE personal_rating IS NULL "
+        "  AND inbox_dismissed_at IS NULL "
+        "  AND blocked_from_playlists = 0 "
+        "  AND match_status != 'quarantined' "
+        "  AND NOT EXISTS (SELECT 1 FROM track_tags tt "
+        "                  WHERE tt.track_pk = t.track_pk AND tt.tag_type = 'private_manual')"
+    )
+    params: list = []
+    if source_playlist:
+        base += (
+            " AND EXISTS (SELECT 1 FROM track_playlist_membership m "
+            "WHERE m.track_pk = t.track_pk AND m.playlist_id = ?)"
+        )
+        params.append(source_playlist)
+
     conn = get_connection()
     try:
         rows = conn.execute(
-            """SELECT track_pk, canonical_title, canonical_artist, album_title,
-                      duration_ms, ytm_track_id, personal_rating, match_status,
-                      blocked_from_playlists, do_not_recommend, created_at
-               FROM tracks t
-               WHERE personal_rating IS NULL
-                 AND inbox_dismissed_at IS NULL
-                 AND blocked_from_playlists = 0
-                 AND match_status != 'quarantined'
-                 AND NOT EXISTS (SELECT 1 FROM track_tags tt
-                                 WHERE tt.track_pk = t.track_pk AND tt.tag_type = 'private_manual')
-               ORDER BY created_at DESC LIMIT ?""",
-            (limit,),
+            "SELECT track_pk, canonical_title, canonical_artist, album_title, "
+            "duration_ms, ytm_track_id, personal_rating, match_status, "
+            "blocked_from_playlists, do_not_recommend, created_at "
+            + base + " ORDER BY created_at DESC LIMIT ?",
+            params + [limit],
         ).fetchall()
-        total = conn.execute(
-            """SELECT COUNT(*) FROM tracks t
-               WHERE personal_rating IS NULL AND inbox_dismissed_at IS NULL
-                 AND blocked_from_playlists = 0 AND match_status != 'quarantined'
-                 AND NOT EXISTS (SELECT 1 FROM track_tags tt
-                                 WHERE tt.track_pk = t.track_pk AND tt.tag_type = 'private_manual')"""
-        ).fetchone()[0]
+        total = conn.execute("SELECT COUNT(*) " + base, params).fetchone()[0]
         tracks = [dict(r) for r in rows]
         pks = [t["track_pk"] for t in tracks]
         memberships_by_track: dict[str, list] = {pk: [] for pk in pks}
@@ -857,7 +917,25 @@ def recent_listens(limit: int = Query(10, ge=1, le=50)):
                LIMIT ?""",
             (limit,),
         ).fetchall()
-        return {"listens": [dict(r) for r in rows]}
+        listens = [dict(r) for r in rows]
+        # Attach source-playlist chips so the Home cards support cull-on-listen.
+        pks = [t["track_pk"] for t in listens]
+        memberships_by_track: dict[str, list] = {pk: [] for pk in pks}
+        if pks:
+            placeholders = ",".join("?" * len(pks))
+            for row in conn.execute(
+                f"""SELECT track_pk, playlist_id, playlist_name
+                    FROM track_playlist_membership
+                    WHERE track_pk IN ({placeholders})
+                    ORDER BY playlist_name COLLATE NOCASE""",
+                pks,
+            ):
+                memberships_by_track[row["track_pk"]].append(
+                    {"playlist_id": row["playlist_id"], "playlist_name": row["playlist_name"]}
+                )
+        for t in listens:
+            t["playlists"] = memberships_by_track[t["track_pk"]]
+        return {"listens": listens}
     finally:
         conn.close()
 

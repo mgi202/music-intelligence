@@ -122,7 +122,12 @@
 
   /* Source-playlist chips on a track card */
   .plrow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
-  .plrow .plchip { font-size: 10px; padding: 2px 8px; border-radius: 6px; background: #14202a; color: #6fb6d6; border: 1px solid #1d3340; }
+  .plrow .plchip { display: inline-flex; align-items: center; font-size: 10px; border-radius: 6px; background: #14202a; color: #6fb6d6; border: 1px solid #1d3340; overflow: hidden; }
+  .plrow .plname { padding: 2px 4px 2px 8px; cursor: pointer; }
+  .plrow .plx { background: none; border: none; color: #6fb6d6; padding: 2px 7px; cursor: pointer; font-size: 12px; line-height: 1; opacity: .65; }
+  .plrow .plx:hover { opacity: 1; color: var(--danger); background: #2a1414; }
+  #toast .undobtn { margin-left: 12px; background: #111; color: var(--accent); border: none; border-radius: 6px; padding: 3px 11px; font-weight: 700; cursor: pointer; }
+  .filterbar.inboxfilter { padding: 2px 0 10px; }
 
   /* Auto-tag reject affordance: auto tags carry a faint × on the right */
   .tagrow .tag.auto { cursor: pointer; }
@@ -200,9 +205,9 @@
 
 <script>
 const state = {
-  q: "", rating: "", tags: [], tagMode: "and", sourcePlaylist: "",
+  q: "", rating: "", tags: [], tagMode: "and", sourcePlaylist: "", inboxPlaylist: "",
   offset: 0, limit: 100, total: 0,
-  tracks: [], allTags: [], vocab: [], view: "library",
+  tracks: [], allTags: [], vocab: [], sourcePlaylists: [], view: "library",
   isMobile: /Android|iPhone|iPad/i.test(navigator.userAgent),
 };
 
@@ -256,7 +261,10 @@ function trackCard(t, opts = {}) {
     return `<span class="tag ${manual ? "manual" : "auto"}" ${click}>${esc(g.tag)}</span>`;
   }).join("");
   const plchips = (t.playlists || []).map(p =>
-    `<span class="plchip" title="in this YTM playlist">${esc(p.playlist_name)}</span>`).join("");
+    `<span class="plchip">
+       <span class="plname" title="filter to this playlist" onclick="filterPlaylist('${esc(p.playlist_id)}')">${esc(p.playlist_name)}</span>
+       <button class="plx" title="remove from this playlist on YTM" onclick="removeFromPlaylist('${t.track_pk}','${esc(p.playlist_id)}')">×</button>
+     </span>`).join("");
   return `
     <div class="track" id="tr-${t.track_pk}">
       <div class="row1">
@@ -298,6 +306,7 @@ async function trackMenu(pk) {
       ${t.blocked_from_playlists ? "Unblock" : "Block from playlists"}</button>
     <button onclick="setFlag('${pk}','do_not_recommend',${t.do_not_recommend ? 0 : 1});this.closest('.menu').remove()">
       ${t.do_not_recommend ? "Allow recommending" : "Don't recommend"}</button>
+    <button onclick="removeFromAllPlaylists('${pk}');this.closest('.menu').remove()">Remove from all my YTM playlists</button>
     <button class="danger" onclick="wrongMatch('${pk}');this.closest('.menu').remove()">Wrong match (quarantine)</button>
     <button onclick="this.closest('.menu').remove()">Cancel</button>
   </div>`;
@@ -406,6 +415,60 @@ function play(videoId, label) {
 function closePlayer() {
   $("ytplayer").src = "";
   $("playerbar").classList.remove("visible");
+}
+
+// ── Source-playlist editing: cull tracks from your own YTM playlists ──
+function refreshActiveView() {
+  if (state.view === "library") loadTracks();
+  else if (state.view === "inbox") loadInbox();
+  else if (state.view === "home") loadHome();
+}
+
+let undoTimer;
+function undoToast(msg, onUndo) {
+  const t = $("toast");
+  clearTimeout(undoTimer);
+  t.innerHTML = `${esc(msg)} <button class="undobtn" id="undobtn">Undo</button>`;
+  t.classList.add("show");
+  $("undobtn").onclick = async () => {
+    t.classList.remove("show"); clearTimeout(undoTimer);
+    try { await onUndo(); } catch (e) { alert("Undo failed: " + e.message); }
+  };
+  undoTimer = setTimeout(() => t.classList.remove("show"), 6000);
+}
+
+// Tap a playlist chip's name → filter the current view to that playlist.
+function filterPlaylist(playlistId) {
+  if (state.view === "inbox") { state.inboxPlaylist = playlistId; loadInbox(); return; }
+  state.sourcePlaylist = playlistId;
+  if (state.view !== "library") switchView("library");   // switchView reloads + syncs dropdown
+  else { loadSourcePlaylists(); loadTracks(); }
+}
+
+// Tap a chip's × → remove the track from that YTM playlist, with one-tap Undo.
+async function removeFromPlaylist(pk, playlistId) {
+  toast("Removing…");
+  try {
+    const r = await api(`/api/tracks/${pk}/playlists/${encodeURIComponent(playlistId)}/remove`,
+                        { method: "POST", body: "{}" });
+    refreshActiveView();
+    undoToast(`Removed from ${r.playlist_name}`, async () => {
+      await api(`/api/tracks/${pk}/playlists/${encodeURIComponent(playlistId)}/add`,
+                { method: "POST", body: JSON.stringify({ playlist_name: r.playlist_name }) });
+      refreshActiveView(); toast("Re-added");
+    });
+  } catch (e) { alert("Remove failed: " + e.message); }
+}
+
+async function removeFromAllPlaylists(pk) {
+  if (!confirm("Remove this track from ALL your YTM playlists?\n\nIt's also blocked from auto-generated playlists so your rules won't re-add it.")) return;
+  toast("Removing from all…");
+  try {
+    const r = await api(`/api/tracks/${pk}/playlists/remove-all`, { method: "POST", body: "{}" });
+    refreshActiveView();
+    const n = (r.removed || []).length, f = (r.failed || []).length;
+    toast(`Removed from ${n} playlist${n !== 1 ? "s" : ""}${f ? ` · ${f} read-only skipped` : ""}`);
+  } catch (e) { alert("Failed: " + e.message); }
 }
 
 // ── Playlists ────────────────────────────
@@ -605,6 +668,7 @@ async function loadTagChips() {
 async function loadSourcePlaylists() {
   let pls = [];
   try { pls = await api("/api/source-playlists"); } catch (e) {}
+  state.sourcePlaylists = pls;
   const sel = $("srcplaylist");
   sel.innerHTML = `<option value="">All playlists</option>` + pls.map(p =>
     `<option value="${esc(p.playlist_id)}" ${state.sourcePlaylist === p.playlist_id ? "selected" : ""}>${esc(p.playlist_name)} (${p.n})</option>`
@@ -675,14 +739,23 @@ document.addEventListener("visibilitychange", () => {
 
 // ── Inbox (T5) ──
 async function loadInbox() {
-  const data = await api("/api/inbox?limit=200");
+  if (!state.sourcePlaylists.length) { try { state.sourcePlaylists = await api("/api/source-playlists"); } catch (e) {} }
+  const p = new URLSearchParams({ limit: 200 });
+  if (state.inboxPlaylist) p.set("source_playlist", state.inboxPlaylist);
+  const data = await api(`/api/inbox?${p}`);
   state.inbox = data.tracks;
   const badge = $("inboxbadge");
   if (data.total) { badge.textContent = data.total; badge.style.display = ""; }
   else badge.style.display = "none";
-  $("inbox").innerHTML = data.tracks.length
+  const filter = `<div class="filterbar inboxfilter"><select id="inboxplaylist">
+      <option value="">All playlists</option>
+      ${state.sourcePlaylists.map(pl =>
+        `<option value="${esc(pl.playlist_id)}" ${state.inboxPlaylist === pl.playlist_id ? "selected" : ""}>${esc(pl.playlist_name)} (${pl.n})</option>`).join("")}
+    </select></div>`;
+  $("inbox").innerHTML = filter + (data.tracks.length
     ? data.tracks.map(t => trackCard(t, { dismiss: true })).join("")
-    : '<div class="empty">Inbox zero ✓ — nothing to triage.</div>';
+    : '<div class="empty">Inbox zero ✓ — nothing to triage.</div>');
+  $("inboxplaylist").onchange = (e) => { state.inboxPlaylist = e.target.value; loadInbox(); };
 }
 
 // ── Review queue: dedup pairs (S8) ──

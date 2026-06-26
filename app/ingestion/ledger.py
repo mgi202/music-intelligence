@@ -304,27 +304,38 @@ def record_source_memberships(
     written = 0
     with db_conn(db_path) as conn:
         for playlist_id, info in memberships.items():
-            name = (info or {}).get("name") or playlist_id
-            video_ids = (info or {}).get("video_ids") or set()
-            pks: list[str] = []
-            for vid in video_ids:
+            info = info or {}
+            name = info.get("name") or playlist_id
+            # items: {videoId: setVideoId}. Fall back to a set of videoIds with
+            # unknown setVideoId for older callers.
+            items = info.get("items")
+            if items is None:
+                items = {v: None for v in (info.get("video_ids") or set())}
+            # Resolve to ledger rows, keeping (track_pk, videoId, setVideoId).
+            rows: list[tuple] = []
+            seen_pk: set[str] = set()
+            for vid, set_vid in items.items():
                 pk = _resolve_pk_by_video_id(vid, conn)
-                if pk:
-                    pks.append(pk)
+                if pk and pk not in seen_pk:
+                    seen_pk.add(pk)
+                    rows.append((pk, vid, set_vid))
             # Replace this playlist's membership atomically.
             conn.execute(
                 "DELETE FROM track_playlist_membership WHERE playlist_id = ? AND source = ?",
                 (playlist_id, source),
             )
-            for pk in set(pks):
+            for pk, vid, set_vid in rows:
                 conn.execute(
                     """INSERT INTO track_playlist_membership
-                           (track_pk, playlist_id, playlist_name, source, last_seen_at)
-                       VALUES (?, ?, ?, ?, ?)
+                           (track_pk, playlist_id, playlist_name, source,
+                            video_id, set_video_id, last_seen_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(track_pk, playlist_id, source) DO UPDATE SET
                            playlist_name = excluded.playlist_name,
+                           video_id      = excluded.video_id,
+                           set_video_id  = excluded.set_video_id,
                            last_seen_at  = excluded.last_seen_at""",
-                    (pk, playlist_id, name, source, now),
+                    (pk, playlist_id, name, source, vid, set_vid, now),
                 )
                 written += 1
 

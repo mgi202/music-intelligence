@@ -498,6 +498,10 @@ CREATE TABLE IF NOT EXISTS track_playlist_membership (
     playlist_id     TEXT NOT NULL,
     playlist_name   TEXT NOT NULL,
     source          TEXT NOT NULL DEFAULT 'ytm' CHECK (source IN ('ytm','spotify')),
+    -- Needed to write back to YTM: remove_playlist_items requires the per-item
+    -- setVideoId, paired with its videoId. Captured during the ingest walk.
+    video_id        TEXT,
+    set_video_id    TEXT,
     last_seen_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (track_pk, playlist_id, source),
     FOREIGN KEY (track_pk) REFERENCES tracks(track_pk) ON DELETE CASCADE
