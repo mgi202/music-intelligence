@@ -20,3 +20,6 @@ dbs:
         # Keep 24h of point-in-time snapshots; retain weekly for 4 weeks.
         retention: 168h
         snapshot-interval: 24h
+        # Default is 1s, which churns thousands of tiny WAL objects/day and
+        # inflates B2 Class C (list) transactions. 30s is plenty for this DB.
+        sync-interval: 30s
