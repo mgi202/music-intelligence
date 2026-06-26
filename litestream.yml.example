@@ -6,20 +6,48 @@
 # docker-compose.yml. See DEPLOY.md §6.
 #
 # Create a B2 bucket + application key at backblaze.com first.
+#
+# SCHEMA: litestream v0.5.x. Note the global blocks below (levels, snapshot,
+# l0-retention*) — these govern the background monitors that drive Backblaze
+# Class C (LIST) transactions. Defaults are aggressive (L0 check every 15s,
+# L1 compaction every 30s ≈ 8.6k LIST/day) and will blow past B2's 2,500/day
+# free Class C allowance. The values below keep us well under it.
+
+# ---- Global cost-control: compaction levels ----
+# Each level is compacted on its own interval; every compaction issues a LIST.
+# Longer intervals = far fewer Class C calls. Fine for a low-write backup DB
+# with no VFS read replicas (restore granularity stays at the LTX level).
+levels:
+  - interval: 5m      # L0 -> L1   (default ~30s → 10x fewer LIST calls)
+  - interval: 1h      # L1 -> L2
+  - interval: 24h     # L2 -> L3
+
+# ---- Global snapshot + retention (replaces deprecated per-replica fields) ----
+snapshot:
+  interval: 24h       # one full snapshot per day
+  retention: 168h     # keep 7 days of point-in-time history
+
+# ---- L0 retention check ----
+# We do NOT use VFS read replicas, so the only job of L0 retention is to bound
+# storage of tiny already-compacted files. Raise the check interval well above
+# the 15s default; this is the single biggest Class C reducer.
+l0-retention: 5m
+l0-retention-check-interval: 10m
+
+# ---- Optional: integrity validation. Off by default; cheap if enabled. ----
+# validation:
+#   interval: 6h
 
 dbs:
   - path: /data/library.db
-    replicas:
-      - type: s3
-        # B2 S3-compatible endpoint — match your bucket's region.
-        endpoint: s3.us-west-004.backblazeb2.com
-        bucket: <YOUR_B2_BUCKET_NAME>
-        path: library.db
-        access-key-id: <YOUR_B2_KEY_ID>
-        secret-access-key: <YOUR_B2_APPLICATION_KEY>
-        # Keep 24h of point-in-time snapshots; retain weekly for 4 weeks.
-        retention: 168h
-        snapshot-interval: 24h
-        # Default is 1s, which churns thousands of tiny WAL objects/day and
-        # inflates B2 Class C (list) transactions. 30s is plenty for this DB.
-        sync-interval: 30s
+    replica:                                  # v0.5.x: single `replica`, not `replicas:` array
+      type: s3
+      # B2 S3-compatible endpoint — match your bucket's region.
+      endpoint: s3.us-west-004.backblazeb2.com
+      bucket: <YOUR_B2_BUCKET_NAME>
+      path: library.db
+      access-key-id: <YOUR_B2_KEY_ID>
+      secret-access-key: <YOUR_B2_APPLICATION_KEY>
+      # Default sync-interval is 1s; 30s is plenty for this DB's write volume
+      # and cuts PUT (Class A) churn and downstream object count.
+      sync-interval: 30s
