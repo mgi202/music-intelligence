@@ -177,8 +177,30 @@ def list_tracks(
         pks = [t["track_pk"] for t in tracks]
         tags_by_track: dict[str, list] = {pk: [] for pk in pks}
         memberships_by_track: dict[str, list] = {pk: [] for pk in pks}
+        refs_by_track: dict[str, list] = {pk: [] for pk in pks}
         if pks:
             placeholders = ",".join("?" * len(pks))
+            # Reference exemplar state: which profiles each track is a POSITIVE
+            # example of (origin auto/manual), plus profiles it's been vetoed
+            # from (sticky near_miss). Powers the one-tap 'not a good example'.
+            for row in conn.execute(
+                f"""SELECT r.track_pk, r.profile_id, p.tag_name, r.label_type, r.created_by
+                    FROM reference_track_labels r
+                    JOIN tag_profiles p ON p.profile_id = r.profile_id
+                    WHERE r.track_pk IN ({placeholders})
+                      AND (r.label_type = 'positive'
+                           OR (r.label_type = 'near_miss' AND r.created_by = 'veto'))
+                    ORDER BY p.tag_name""",
+                pks,
+            ):
+                is_veto = row["label_type"] == "near_miss"
+                refs_by_track[row["track_pk"]].append({
+                    "profile_id": row["profile_id"],
+                    "tag_name": row["tag_name"],
+                    "origin": "veto" if is_veto else (
+                        "auto" if str(row["created_by"]).startswith("auto:") else "manual"),
+                    "vetoed": is_veto,
+                })
             # Effective tags: deduped, alias-folded, hidden + per-track-rejected
             # already removed by the view.
             for row in conn.execute(
@@ -205,6 +227,7 @@ def list_tracks(
         for t in tracks:
             t["tags"] = tags_by_track[t["track_pk"]]
             t["playlists"] = memberships_by_track[t["track_pk"]]
+            t["reference_profiles"] = refs_by_track[t["track_pk"]]
 
         return {"total": total, "limit": limit, "offset": offset, "tracks": tracks}
     finally:
@@ -263,6 +286,43 @@ def delete_tag(track_pk: str, tag: str):
     if not removed:
         raise HTTPException(404, "No private_manual tag with that name on this track")
     return {"removed": True}
+
+
+# ─────────────────────────────────────────
+# Reference exemplars (derived automatically from tags; vetoable per track)
+# ─────────────────────────────────────────
+
+@app.post("/api/tracks/{track_pk}/reference/{profile_id}/veto")
+def veto_reference(track_pk: str, profile_id: str):
+    """'Not a good example.' Demote a track from positive to a sticky near_miss
+    for this profile so auto-derivation can't re-promote it."""
+    from app.tags import reference_manager
+    try:
+        return reference_manager.veto_exemplar(track_pk, profile_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.delete("/api/tracks/{track_pk}/reference/{profile_id}/veto")
+def unveto_reference(track_pk: str, profile_id: str):
+    """Undo a veto and let derivation re-promote the track if its tags still map."""
+    from app.tags import reference_manager
+    return reference_manager.unveto_exemplar(track_pk, profile_id)
+
+
+@app.get("/api/reference/readiness")
+def reference_readiness():
+    """Per-profile progress toward the auto-apply gate (15 pos / 15 neg+near /
+    3 artists). Drives the readiness strip in the UI."""
+    from app.tags import reference_manager
+    conn = get_connection()
+    try:
+        ids = [r["profile_id"] for r in conn.execute(
+            "SELECT profile_id FROM tag_profiles ORDER BY taxonomy_layer, profile_id"
+        ).fetchall()]
+    finally:
+        conn.close()
+    return {"profiles": [reference_manager.profile_readiness(pid) for pid in ids]}
 
 
 @app.get("/api/tags")

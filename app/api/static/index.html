@@ -109,6 +109,8 @@
   .menu .sheet button { display: block; width: 100%; text-align: left; background: none; border: none; color: var(--text); padding: 13px 14px; font-size: 14px; cursor: pointer; border-radius: 8px; }
   .menu .sheet button:hover { background: var(--panel2); }
   .menu .sheet button.danger { color: var(--danger); }
+  .menu .sheet .menuhint { padding: 8px 14px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); }
+  .menu .sheet .menusep { height: 1px; background: #2b2b38; margin: 6px 8px; }
 
   /* Evidence + health */
   .evidence { background: var(--panel2); border-radius: 8px; padding: 10px; margin-top: 8px; font-size: 12px; }
@@ -316,13 +318,29 @@ function renderLibrary() {
         ? `<button class="loadmore" onclick="more()">Load more (${state.total - state.tracks.length} remaining)</button>` : "");
 }
 
-// ── ⋯ menu: block / don't-recommend / wrong-match ──
+// ── ⋯ menu: block / don't-recommend / reference exemplars / wrong-match ──
 async function trackMenu(pk) {
   const t = (state.tracks.concat(state.inbox || [])).find(x => x.track_pk === pk) || {};
   const bg = document.createElement("div");
   bg.className = "menu";
   bg.onclick = (ev) => { if (ev.target === bg) bg.remove(); };
+
+  // Reference-exemplar rows: one per profile this track is (or was) an example
+  // of. Tap to veto ("not a good example") or restore. Derived from your tags —
+  // nothing to set up. Hidden entirely if the track maps to no profile.
+  const refs = t.reference_profiles || [];
+  const refRows = refs.map(r => r.vetoed
+    ? `<button onclick="unvetoReference('${pk}','${esc(r.profile_id)}');this.closest('.menu').remove()">
+         ↩︎ Restore as example of “${esc(r.tag_name)}”</button>`
+    : `<button onclick="vetoReference('${pk}','${esc(r.profile_id)}');this.closest('.menu').remove()">
+         ✗ Not a good example of “${esc(r.tag_name)}”</button>`
+  ).join("");
+  const refSection = refRows
+    ? `<div class="menuhint">Reference examples (from your tags)</div>${refRows}<div class="menusep"></div>`
+    : "";
+
   bg.innerHTML = `<div class="sheet">
+    ${refSection}
     <button onclick="setFlag('${pk}','blocked_from_playlists',${t.blocked_from_playlists ? 0 : 1});this.closest('.menu').remove()">
       ${t.blocked_from_playlists ? "Unblock" : "Block from playlists"}</button>
     <button onclick="setFlag('${pk}','do_not_recommend',${t.do_not_recommend ? 0 : 1});this.closest('.menu').remove()">
@@ -332,6 +350,18 @@ async function trackMenu(pk) {
     <button onclick="this.closest('.menu').remove()">Cancel</button>
   </div>`;
   document.body.appendChild(bg);
+}
+
+async function vetoReference(pk, profileId) {
+  await api(`/api/tracks/${pk}/reference/${encodeURIComponent(profileId)}/veto`, { method: "POST", body: "{}" });
+  toast("Won't use as an example");
+  if (state.view === "library") loadTracks(); else if (state.view === "inbox") loadInbox();
+}
+
+async function unvetoReference(pk, profileId) {
+  await api(`/api/tracks/${pk}/reference/${encodeURIComponent(profileId)}/veto`, { method: "DELETE" });
+  toast("Restored as an example");
+  if (state.view === "library") loadTracks(); else if (state.view === "inbox") loadInbox();
 }
 
 async function setFlag(pk, flag, value) {
@@ -374,6 +404,14 @@ async function rate(pk, rating) {
 
 async function addTag(pk) {
   if (!state.allTags.length) { try { state.allTags = await api("/api/tags"); } catch (e) {} }
+  // Profile names first, flagged — tagging with one of these auto-creates a
+  // training example, so nudge toward them without forcing it.
+  if (!state.profiles) {
+    try { state.profiles = (await api("/api/reference/readiness")).profiles || []; }
+    catch (e) { state.profiles = []; }
+  }
+  const profOpts = state.profiles
+    .map(p => `<option value="${esc(p.profile_id)}" label="★ teaches a profile">`).join("");
   const opts = state.allTags.map(t => `<option value="${esc(t.tag)}">`).join("");
   const bg = document.createElement("div");
   bg.className = "modal-bg";
@@ -381,8 +419,8 @@ async function addTag(pk) {
   bg.innerHTML = `<div class="modal">
     <h2>Add tag</h2>
     <input id="tag-input" list="tag-suggest" placeholder="start typing… e.g. dub-techno" autocomplete="off" autocapitalize="none">
-    <datalist id="tag-suggest">${opts}</datalist>
-    <div class="hint">Pick an existing tag (autocompletes) or type a new one.</div>
+    <datalist id="tag-suggest">${profOpts}${opts}</datalist>
+    <div class="hint">Tags marked ★ also teach the system a genre example. Any other tag works too.</div>
     <div class="btnrow">
       <button onclick="this.closest('.modal-bg').remove()">Cancel</button>
       <button class="primary" id="tag-save">Add</button>

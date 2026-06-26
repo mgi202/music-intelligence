@@ -13,10 +13,25 @@ This module is the single entry point for all manual tag operations.
 from __future__ import annotations
 
 import json
-import sqlite3
-from datetime import datetime, timezone
 
 from app.db.connection import db_conn
+
+
+def _reconcile_references(track_pk: str, db_path: str | None) -> None:
+    """
+    Re-derive a track's auto reference labels after a manual tag change.
+
+    Tagging is the user's chokepoint for genre claims, so this is where
+    reference exemplars are kept in sync (positives from tags, negatives from
+    opposing profiles). Best-effort: derivation must NEVER break tagging, so
+    any error here is swallowed — backfill_all_references() can repair later.
+    Runs AFTER the tag write has committed so the fresh connection sees it.
+    """
+    try:
+        from app.tags.reference_manager import recompute_track_references
+        recompute_track_references(track_pk, db_path=db_path)
+    except Exception:
+        pass
 
 
 def apply_tag(
@@ -30,12 +45,12 @@ def apply_tag(
 
     Idempotent — if the tag already exists, returns False (no error).
     Returns True if a new tag was applied.
+
+    Side effect: reconciles auto reference labels (see _reconcile_references).
     """
     tag = tag.lower().strip()
     if not tag:
         raise ValueError("Tag cannot be empty")
-
-    now = datetime.now(timezone.utc).isoformat()
 
     with db_conn(db_path) as conn:
         # Verify track exists
@@ -50,15 +65,19 @@ def apply_tag(
         """, (track_pk, tag)).fetchone()
 
         if existing:
-            return False  # Already applied
+            applied = False
+        else:
+            evidence_json = json.dumps({"notes": notes}) if notes else None
+            conn.execute("""
+                INSERT INTO track_tags (track_pk, tag, tag_type, source, confidence, evidence_json)
+                VALUES (?, ?, 'private_manual', 'manual', 1.0, ?)
+            """, (track_pk, tag, evidence_json))
+            applied = True
 
-        evidence_json = json.dumps({"notes": notes}) if notes else None
-        conn.execute("""
-            INSERT INTO track_tags (track_pk, tag, tag_type, source, confidence, evidence_json)
-            VALUES (?, ?, 'private_manual', 'manual', 1.0, ?)
-        """, (track_pk, tag, evidence_json))
-
-        return True
+    # After commit: keep reference exemplars in sync. Idempotent, so running it
+    # even when the tag pre-existed simply heals any missing labels.
+    _reconcile_references(track_pk, db_path)
+    return applied
 
 
 def remove_tag(
@@ -72,6 +91,9 @@ def remove_tag(
     Only removes private_manual tags. Automated tags must be managed
     through the classification system, not directly.
     Returns True if a tag was removed.
+
+    Side effect: reconciles auto reference labels — removing the tag retracts
+    any exemplars that depended on it.
     """
     tag = tag.lower().strip()
 
@@ -80,7 +102,10 @@ def remove_tag(
             DELETE FROM track_tags
             WHERE track_pk = ? AND tag = ? AND tag_type = 'private_manual'
         """, (track_pk, tag))
-        return result.rowcount > 0
+        removed = result.rowcount > 0
+
+    _reconcile_references(track_pk, db_path)
+    return removed
 
 
 def list_tags(
