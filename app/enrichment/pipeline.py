@@ -47,6 +47,13 @@ _SPECIFIC_TAG_THRESHOLD = 2
 _WEAK_TTL_DAYS = 30      # public_metadata_weak
 _ENRICHED_TTL_DAYS = 90  # metadata_enriched
 
+# Retry cooldown for zero-match tracks. A metadata_only track that has already
+# been attempted (it has an enrichment_state row — _enrich_track always writes
+# one) is not retried until this many days have passed. Without this, a wall of
+# permanently-unmatchable tracks at the head of created_at order starves the
+# queue: every pass re-processes the same batch and makes zero net progress.
+_RETRY_DAYS = int(os.getenv("ENRICHMENT_RETRY_DAYS", "7"))
+
 
 def run_pipeline(
     track_pks: list[str] | None = None,
@@ -64,24 +71,29 @@ def run_pipeline(
     with db_conn(db_path) as conn:
         if track_pks is None:
             now = datetime.now(timezone.utc)
+            retry_cutoff = (now - timedelta(days=_RETRY_DAYS)).isoformat()
             weak_cutoff = (now - timedelta(days=_WEAK_TTL_DAYS)).isoformat()
             enriched_cutoff = (now - timedelta(days=_ENRICHED_TTL_DAYS)).isoformat()
             # Select fresh tracks plus stale ones past their re-enrichment TTL.
-            # "last enriched" is enrichment_state.updated_at.
+            # "last enriched" is enrichment_state.updated_at. metadata_only
+            # tracks that were already attempted (es row exists) wait out the
+            # retry cooldown so zero-match tracks can't starve the queue.
             rows = conn.execute("""
                 SELECT t.track_pk, t.canonical_title, t.canonical_artist,
                        t.normalized_title, t.normalized_artist,
                        t.isrc, t.duration_ms, t.musicbrainz_recording_id
                 FROM tracks t
                 LEFT JOIN enrichment_state es ON es.track_pk = t.track_pk
-                WHERE t.match_status = 'metadata_only'
+                WHERE (t.match_status = 'metadata_only'
+                       AND (es.updated_at IS NULL OR es.updated_at < ?))
                    OR (t.match_status = 'public_metadata_weak'
                        AND (es.updated_at IS NULL OR es.updated_at < ?))
                    OR (t.match_status = 'metadata_enriched'
                        AND (es.updated_at IS NULL OR es.updated_at < ?))
                 ORDER BY t.created_at ASC
                 LIMIT ?
-            """, (weak_cutoff, enriched_cutoff, limit or _BATCH_SIZE)).fetchall()
+            """, (retry_cutoff, weak_cutoff, enriched_cutoff,
+                  limit or _BATCH_SIZE)).fetchall()
         else:
             rows = conn.execute(f"""
                 SELECT track_pk, canonical_title, canonical_artist,
@@ -91,22 +103,44 @@ def run_pipeline(
                 WHERE track_pk IN ({','.join('?' * len(track_pks))})
             """, track_pks).fetchall()
 
-    summary = {"processed": 0, "enriched": 0, "weak": 0, "strong": 0, "failed": 0}
+    summary = {"processed": 0, "enriched": 0, "weak": 0, "strong": 0,
+               "no_match": 0, "failed": 0}
+    _STATUS_KEY = {
+        "metadata_enriched": "enriched",
+        "public_metadata_weak": "weak",
+        "public_metadata_strong": "strong",
+        "metadata_only": "no_match",
+    }
 
     for row in rows:
         try:
-            _enrich_track(dict(row), db_path)
+            new_status = _enrich_track(dict(row), db_path)
             summary["processed"] += 1
+            summary[_STATUS_KEY.get(new_status, "no_match")] += 1
         except Exception as e:
             logger.error(f"Pipeline failed for {row['track_pk']}: {e}")
             _log_event(row["track_pk"], "pipeline", "error", str(e), db_path)
             summary["failed"] += 1
 
+    # Stall alarm: a busy pass where nothing advanced past metadata_only means
+    # the batch is all zero-match tracks — invisible in per-pass stats otherwise.
+    if summary["processed"] > 0 and summary["no_match"] == summary["processed"]:
+        msg = (f"Enrichment pass stalled: {summary['processed']} tracks attempted, "
+               f"0 advanced past metadata_only (all zero-match)")
+        logger.warning(msg)
+        try:
+            from app.observability import notify
+            notify(f"[music-intel] {msg}")
+        except Exception:  # noqa: BLE001 — alerting must never raise
+            pass
+
     return summary
 
 
-def _enrich_track(track: dict, db_path: str | None) -> None:
-    """Run all enrichment sources for a single track and persist results."""
+def _enrich_track(track: dict, db_path: str | None) -> str:
+    """Run all enrichment sources for a single track and persist results.
+
+    Returns the track's new match_status."""
     pk = track["track_pk"]
     title = track["canonical_title"]
     artist = track["canonical_artist"]
@@ -263,6 +297,7 @@ def _enrich_track(track: dict, db_path: str | None) -> None:
             "UPDATE tracks SET match_status = ?, updated_at = ? WHERE track_pk = ?",
             (new_status, datetime.now(timezone.utc).isoformat(), pk),
         )
+    return new_status
 
 
 def _created_at(pk: str, conn: sqlite3.Connection) -> str:

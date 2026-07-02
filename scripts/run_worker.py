@@ -51,6 +51,13 @@ def _alert(stage: str, exc: Exception) -> None:
         logger.exception("ntfy alert failed")
 
 
+def _enrich_batch_size() -> int:
+    """ENRICHMENT_BATCH_SIZE (the documented knob) with legacy
+    ENRICH_BATCH_SIZE fallback — the worker read only the legacy name before
+    2026-07-02, so .env tuning of the documented name silently did nothing."""
+    return int(os.getenv("ENRICHMENT_BATCH_SIZE") or os.getenv("ENRICH_BATCH_SIZE", "200"))
+
+
 def run_pass() -> None:
     """One full six-stage pass. Each stage is isolated."""
     from app.db.init_db import init_db
@@ -99,7 +106,7 @@ def run_pass() -> None:
     try:
         from app.enrichment.pipeline import run_pipeline
 
-        stats = run_pipeline(limit=int(os.getenv("ENRICH_BATCH_SIZE", "200")))
+        stats = run_pipeline(limit=_enrich_batch_size())
         logger.info("Enrichment: %s", stats)
     except Exception as e:
         _alert("Enrichment", e)
