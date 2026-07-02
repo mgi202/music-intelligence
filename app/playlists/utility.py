@@ -233,137 +233,155 @@ def seed_example_rules(
     return inserted
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Locked tag vocabulary (Verdict Queue, 2026-07-02).
+#
+# The functional (8) and personal (7) layers are LOCKED in TAG-VOCAB-DESIGN.md.
+# Naming happens there, once — never per-track. Two subgenre profiles are kept
+# from the original spec seed; more arrive when the subgenre vocab locks (a data
+# change only — adding tag_profiles rows needs NO code change here).
+#
+# descriptions are copied verbatim from TAG-VOCAB-DESIGN.md so the Verdict Queue
+# FE can render each chip's definition as a tooltip at tagging time.
+#
+# Functional/personal carry no acoustic bands (bpm/energy/valence) on purpose:
+# they describe a track's JOB in a set arc / a listening MOMENT, not its sound.
+# context_terms exist only to widen tag→profile mapping; the tag_name is the
+# primary key term (matching is separator-insensitive, see reference_manager).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# functional (8) + personal (7) + the two kept subgenre profiles.
+LOCKED_TAG_PROFILES: list[dict] = [
+    # ── Functional — a track's job in a set arc ──
+    {"profile_id": "warm-up", "tag_name": "warm-up", "taxonomy_layer": "functional",
+     "description": "Early-set, room-filling. Grooves without demanding attention; "
+                    "leaves headroom. You'd play it to 20 people at 11pm.",
+     "context_terms": ["warm up", "opener", "opening"]},
+    {"profile_id": "groover", "tag_name": "groover", "taxonomy_layer": "functional",
+     "description": "The engine room. Mid-set workhorse that sustains a plateau — "
+                    "momentum without escalation.",
+     "context_terms": ["groove", "rolling groove"]},
+    {"profile_id": "peak-time", "tag_name": "peak-time", "taxonomy_layer": "functional",
+     "description": "Maximum intensity. The track the hour is built around.",
+     "context_terms": ["peak time", "peaktime"]},
+    {"profile_id": "afterhours", "tag_name": "afterhours", "taxonomy_layer": "functional",
+     "description": "Post-peak: darker, deeper, weirder, more hypnotic. 4am music — "
+                    "intensity replaced by trance-induction.",
+     "context_terms": ["after hours", "after-hours", "4am"]},
+    {"profile_id": "closer", "tag_name": "closer", "taxonomy_layer": "functional",
+     "description": "Last-track material. Emotional resolution or statement ending. "
+                    "Rare by nature.",
+     "context_terms": ["closing", "last track"]},
+    {"profile_id": "transition-tool", "tag_name": "transition-tool", "taxonomy_layer": "functional",
+     "description": "Not played for its own sake. DJ utility: long sparse intro/outro, "
+                    "percussive bridge between styles or BPMs.",
+     "context_terms": ["tool", "transition", "dj tool"]},
+    {"profile_id": "breather", "tag_name": "breather", "taxonomy_layer": "functional",
+     "description": "A deliberate mid-set dip — creates contrast so the next build "
+                    "lands harder.",
+     "context_terms": ["interlude", "downtempo break"]},
+    {"profile_id": "anthem", "tag_name": "anthem", "taxonomy_layer": "functional",
+     "description": "Recognisable, emotional, hands-in-air. About memorability, where "
+                    "peak-time is about intensity. Can co-exist with peak-time.",
+     "context_terms": ["anthemic", "hands in the air"]},
+
+    # ── Personal — a concrete recurring listening moment ──
+    {"profile_id": "gym", "tag_name": "gym", "taxonomy_layer": "personal",
+     "description": "Training session. The doors-open-shoulders-back rotation.",
+     "context_terms": ["workout", "training"]},
+    {"profile_id": "drive", "tag_name": "drive", "taxonomy_layer": "personal",
+     "description": "Behind the wheel, general.",
+     "context_terms": ["driving", "car"]},
+    {"profile_id": "focus-work", "tag_name": "focus-work", "taxonomy_layer": "personal",
+     "description": "Desk deep work. Music as concentration scaffolding, no lyrics "
+                    "grabbing attention.",
+     "context_terms": ["focus", "deep work", "concentration"]},
+    {"profile_id": "pre-night-out", "tag_name": "pre-night-out", "taxonomy_layer": "personal",
+     "description": "Getting ready / pres. Building anticipation.",
+     "context_terms": ["pre night out", "pres", "getting ready"]},
+    {"profile_id": "wind-down", "tag_name": "wind-down", "taxonomy_layer": "personal",
+     "description": "Evening decompress or comedown. Landing gear out.",
+     "context_terms": ["wind down", "comedown", "decompress"]},
+    {"profile_id": "deep-listen", "tag_name": "deep-listen", "taxonomy_layer": "personal",
+     "description": "Headphones, full attention, nothing else happening. Music AS the "
+                    "activity.",
+     "context_terms": ["deep listen", "headphones", "active listening"]},
+    {"profile_id": "host", "tag_name": "host", "taxonomy_layer": "personal",
+     "description": "People over — cooking, dinner, background social. Sets tone "
+                    "without dominating.",
+     "context_terms": ["dinner", "hosting", "background social"]},
+
+    # ── Subgenre — kept from the original seed; the rest arrive at vocab lock ──
+    {"profile_id": "warehouse-industrial", "tag_name": "warehouse-industrial",
+     "taxonomy_layer": "subgenre",
+     "description": "Warehouse industrial techno: mechanical, heavy, maximum energy",
+     "bpm_min": 128.0, "bpm_max": 138.0, "energy_min": 0.8, "energy_max": 1.0,
+     "valence_min": None, "valence_max": 0.35,
+     "positive_prompt": "dark mechanical driving warehouse techno industrial percussion peak-time energy cold relentless",
+     "negative_prompt": "melodic house pop vocal commercial EDM relaxed ambient uplifting trance",
+     "context_terms": ["industrial", "warehouse", "mechanical", "hard techno", "brutal"]},
+    {"profile_id": "hypnotic-rolling", "tag_name": "hypnotic-rolling",
+     "taxonomy_layer": "subgenre",
+     "description": "Hypnotic rolling techno: repetitive, trancey, steady groove",
+     "bpm_min": 126.0, "bpm_max": 132.0, "energy_min": 0.65, "energy_max": 0.85,
+     "valence_min": 0.25, "valence_max": 0.5,
+     "positive_prompt": "hypnotic rolling techno repetitive groove trance-like steady minimalist loop",
+     "negative_prompt": "aggressive industrial heavy drop anthem melodic vocal pop",
+     "context_terms": ["hypnotic", "rolling", "minimal", "loopy", "Berlin", "deep techno"]},
+]
+
+# Two tie-breaker rules from TAG-VOCAB-DESIGN.md, rendered in the Verdict Queue's
+# "?" expander so the distinction is available at tagging time (Matthias asked
+# for this explicitly). Served by GET /api/reference/profiles.
+FUNCTIONAL_TIEBREAKERS: list[dict] = [
+    {"pair": "warm-up vs breather",
+     "rule": "Could it open a night from silence? → warm-up. "
+             "Does it only work because of what came before it? → breather."},
+    {"pair": "peak-time vs anthem",
+     "rule": "Would a crowd recognise/react to this specific track? → anthem. "
+             "Just maximally intense? → peak-time only. Both is valid."},
+]
+
+# Old spec profile_id → locked profile_id. Semantically-closest mapping, used by
+# reconcile_tag_profiles() to migrate any existing reference labels when the DB
+# was seeded before the vocab lock. Profiles absent here and not in the locked
+# set (e.g. melodic-late-night) are dropped by reconcile IF label-free.
+PROFILE_RENAME_MAP: dict[str, str] = {
+    "warm-up-groove": "warm-up",
+    "peak-time-dark-techno": "peak-time",
+    "afterhours-dubby": "afterhours",
+    "euphoric-anthem": "anthem",
+    "gym-aggressive": "gym",
+    "focus-minimal": "focus-work",
+    "late-night-drive": "drive",
+}
+
+
+def _profile_insert_params(p: dict, now: str) -> tuple:
+    """Flatten a locked-profile dict to the tag_profiles INSERT column order."""
+    ctx = p.get("context_terms")
+    return (
+        p["profile_id"], p["tag_name"], p["description"], p["taxonomy_layer"],
+        p.get("bpm_min"), p.get("bpm_max"),
+        p.get("energy_min"), p.get("energy_max"),
+        p.get("valence_min"), p.get("valence_max"),
+        p.get("positive_prompt"), p.get("negative_prompt"),
+        json.dumps(ctx) if ctx is not None else p.get("context_terms_json"),
+        now, now,
+    )
+
+
 def seed_starter_tag_profiles(db_path: str | None = None) -> int:
     """
-    Insert the recommended initial tag profiles from spec Section 24.
+    Insert the locked tag-vocabulary profiles (TAG-VOCAB-DESIGN.md).
 
-    These are used as classification targets once Stage 1 begins.
-    Returns the number of rows inserted.
+    These are the classification targets for Stage 1 and the tap-palette /
+    Verdict-Queue vocabulary. Idempotent — profiles that already exist are
+    skipped. Returns the number of rows inserted.
     """
     now = datetime.now(timezone.utc).isoformat()
 
-    profiles = [
-        {
-            "profile_id": "warm-up-groove",
-            "tag_name": "warm-up-groove",
-            "description": "Warm-up groove tracks: builds energy gradually, lower intensity",
-            "taxonomy_layer": "functional",
-            "bpm_min": 118.0, "bpm_max": 126.0,
-            "energy_min": 0.4, "energy_max": 0.65,
-            "valence_min": 0.3, "valence_max": 0.6,
-            "positive_prompt": "warm-up groove minimal techno steady beat building energy low intensity",
-            "negative_prompt": "peak-time aggressive heavy industrial loud energetic anthem",
-            "context_terms_json": json.dumps(["warm-up", "groove", "minimal", "subtle", "opening"]),
-        },
-        {
-            "profile_id": "peak-time-dark-techno",
-            "tag_name": "peak-time-dark-techno",
-            "description": "Peak-time dark techno: high energy, dark mood, floor-ready",
-            "taxonomy_layer": "functional",
-            "bpm_min": 128.0, "bpm_max": 136.0,
-            "energy_min": 0.75, "energy_max": 1.0,
-            "valence_min": None, "valence_max": 0.45,
-            "positive_prompt": "peak-time dark techno industrial mechanical percussion warehouse floor energy",
-            "negative_prompt": "melodic house pop vocal commercial EDM relaxed ambient chill",
-            "context_terms_json": json.dumps(["dark techno", "peak", "floor", "warehouse", "industrial"]),
-        },
-        {
-            "profile_id": "warehouse-industrial",
-            "tag_name": "warehouse-industrial",
-            "description": "Warehouse industrial techno: mechanical, heavy, maximum energy",
-            "taxonomy_layer": "subgenre",
-            "bpm_min": 128.0, "bpm_max": 138.0,
-            "energy_min": 0.8, "energy_max": 1.0,
-            "valence_min": None, "valence_max": 0.35,
-            "positive_prompt": "dark mechanical driving warehouse techno industrial percussion peak-time energy cold relentless",
-            "negative_prompt": "melodic house pop vocal commercial EDM relaxed ambient uplifting trance",
-            "context_terms_json": json.dumps(["industrial", "warehouse", "mechanical", "hard techno", "brutal"]),
-        },
-        {
-            "profile_id": "hypnotic-rolling",
-            "tag_name": "hypnotic-rolling",
-            "description": "Hypnotic rolling techno: repetitive, trancey, steady groove",
-            "taxonomy_layer": "subgenre",
-            "bpm_min": 126.0, "bpm_max": 132.0,
-            "energy_min": 0.65, "energy_max": 0.85,
-            "valence_min": 0.25, "valence_max": 0.5,
-            "positive_prompt": "hypnotic rolling techno repetitive groove trance-like steady minimalist loop",
-            "negative_prompt": "aggressive industrial heavy drop anthem melodic vocal pop",
-            "context_terms_json": json.dumps(["hypnotic", "rolling", "minimal", "loopy", "Berlin", "deep techno"]),
-        },
-        {
-            "profile_id": "afterhours-dubby",
-            "tag_name": "afterhours-dubby",
-            "description": "Afterhours dubby: late-night, dub-influenced, spacious",
-            "taxonomy_layer": "functional",
-            "bpm_min": 120.0, "bpm_max": 128.0,
-            "energy_min": 0.4, "energy_max": 0.65,
-            "valence_min": 0.3, "valence_max": 0.55,
-            "positive_prompt": "afterhours dub techno late night spacious echo reverb deep slow hypnotic",
-            "negative_prompt": "peak-time industrial heavy aggressive loud commercial anthem euphoric",
-            "context_terms_json": json.dumps(["afterhours", "dub", "deep", "late night", "closing"]),
-        },
-        {
-            "profile_id": "melodic-late-night",
-            "tag_name": "melodic-late-night",
-            "description": "Melodic late-night: emotional, atmospheric, after-dark",
-            "taxonomy_layer": "functional",
-            "bpm_min": 120.0, "bpm_max": 128.0,
-            "energy_min": 0.4, "energy_max": 0.7,
-            "valence_min": 0.4, "valence_max": 0.7,
-            "positive_prompt": "melodic late-night emotional atmospheric after-dark deep house progressive",
-            "negative_prompt": "industrial harsh aggressive peak-time dark heavy mechanical",
-            "context_terms_json": json.dumps(["melodic", "emotional", "atmospheric", "late night", "introspective"]),
-        },
-        {
-            "profile_id": "euphoric-anthem",
-            "tag_name": "euphoric-anthem",
-            "description": "Euphoric anthem: uplifting, high energy, peak dancefloor",
-            "taxonomy_layer": "functional",
-            "bpm_min": 128.0, "bpm_max": 138.0,
-            "energy_min": 0.75, "energy_max": 1.0,
-            "valence_min": 0.65, "valence_max": None,
-            "positive_prompt": "euphoric uplifting anthem rave dancefloor peak high energy emotional positive",
-            "negative_prompt": "dark industrial cold mechanical minimal depressive heavy",
-            "context_terms_json": json.dumps(["euphoric", "anthem", "uplifting", "rave", "emotional", "vocal"]),
-        },
-        {
-            "profile_id": "gym-aggressive",
-            "tag_name": "gym-aggressive",
-            "description": "Gym-aggressive: high BPM, relentless energy, motivational",
-            "taxonomy_layer": "personal",
-            "bpm_min": 130.0, "bpm_max": 160.0,
-            "energy_min": 0.85, "energy_max": 1.0,
-            "valence_min": 0.3, "valence_max": 0.65,
-            "positive_prompt": "high energy aggressive fast BPM driving relentless industrial hard techno workout",
-            "negative_prompt": "slow ambient chill relaxed melodic soft quiet downtempo",
-            "context_terms_json": json.dumps(["gym", "workout", "aggressive", "fast", "hard", "energy"]),
-        },
-        {
-            "profile_id": "focus-minimal",
-            "tag_name": "focus-minimal",
-            "description": "Focus-minimal: low distraction, steady, cognitive work background",
-            "taxonomy_layer": "personal",
-            "bpm_min": 110.0, "bpm_max": 125.0,
-            "energy_min": 0.3, "energy_max": 0.6,
-            "valence_min": 0.3, "valence_max": 0.6,
-            "positive_prompt": "minimal focus work background steady subtle not distracting ambient electronic",
-            "negative_prompt": "aggressive loud vocals anthems high energy peak-time drops",
-            "context_terms_json": json.dumps(["minimal", "focus", "work", "background", "subtle", "clean"]),
-        },
-        {
-            "profile_id": "late-night-drive",
-            "tag_name": "late-night-drive",
-            "description": "Late-night drive: medium BPM, mood-oriented, city-at-night feel",
-            "taxonomy_layer": "personal",
-            "bpm_min": 90.0, "bpm_max": 120.0,
-            "energy_min": 0.4, "energy_max": 0.75,
-            "valence_min": 0.3, "valence_max": 0.65,
-            "positive_prompt": "late-night drive city night atmospheric moody electronic trip-hop neo-soul cinematic",
-            "negative_prompt": "peak-time industrial gym aggressive heavy rave loud fast",
-            "context_terms_json": json.dumps(["late night", "drive", "city", "moody", "atmospheric", "night"]),
-        },
-    ]
+    profiles = LOCKED_TAG_PROFILES
 
     inserted = 0
     with db_conn(db_path) as conn:
@@ -383,15 +401,98 @@ def seed_starter_tag_profiles(db_path: str | None = None) -> int:
                     positive_prompt, negative_prompt, context_terms_json,
                     created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                p["profile_id"], p["tag_name"], p["description"], p["taxonomy_layer"],
-                p.get("bpm_min"), p.get("bpm_max"),
-                p.get("energy_min"), p.get("energy_max"),
-                p.get("valence_min"), p.get("valence_max"),
-                p.get("positive_prompt"), p.get("negative_prompt"),
-                p.get("context_terms_json"),
-                now, now,
-            ))
+            """, _profile_insert_params(p, now))
             inserted += 1
 
     return inserted
+
+
+def reconcile_tag_profiles(db_path: str | None = None) -> dict:
+    """
+    Bring tag_profiles into line with the locked vocabulary (TAG-VOCAB-DESIGN.md).
+
+    Idempotent — safe to run on every deploy (called from init_db backfills):
+      1. Migrate any reference labels / classification results from an old
+         spec profile onto its locked successor (PROFILE_RENAME_MAP), then drop
+         the old profile row.
+      2. Insert any missing locked profiles; refresh the description of ones
+         that already exist so definition edits reach the FE.
+      3. Drop leftover non-locked profiles (e.g. melodic-late-night) ONLY when
+         they carry no reference labels — never silently discard training data.
+
+    Returns a summary dict {renamed, inserted, refreshed, dropped, kept_with_labels,
+    labels_migrated}.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    target_ids = {p["profile_id"] for p in LOCKED_TAG_PROFILES}
+    result = {
+        "renamed": [], "inserted": [], "refreshed": [],
+        "dropped": [], "kept_with_labels": [], "labels_migrated": 0,
+    }
+
+    with db_conn(db_path) as conn:
+        existing = {
+            r["profile_id"] for r in
+            conn.execute("SELECT profile_id FROM tag_profiles").fetchall()
+        }
+
+        # 1. Insert missing locked profiles / refresh descriptions of present ones.
+        for p in LOCKED_TAG_PROFILES:
+            pid = p["profile_id"]
+            if pid in existing:
+                conn.execute(
+                    "UPDATE tag_profiles SET description = ?, taxonomy_layer = ?, "
+                    "updated_at = ? WHERE profile_id = ?",
+                    (p["description"], p["taxonomy_layer"], now, pid),
+                )
+                result["refreshed"].append(pid)
+            else:
+                conn.execute(
+                    """INSERT INTO tag_profiles (
+                        profile_id, tag_name, description, taxonomy_layer,
+                        bpm_min, bpm_max, energy_min, energy_max,
+                        valence_min, valence_max,
+                        positive_prompt, negative_prompt, context_terms_json,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    _profile_insert_params(p, now),
+                )
+                result["inserted"].append(pid)
+                existing.add(pid)
+
+        # 2. Migrate labels off renamed old profiles, then drop the old rows.
+        for old_id, new_id in PROFILE_RENAME_MAP.items():
+            if old_id not in existing or old_id == new_id:
+                continue
+            for tbl in ("reference_track_labels", "classification_results"):
+                # Move rows to the successor; UNIQUE clashes (a label already on
+                # the successor) are IGNOREd, then the stale old rows are deleted.
+                moved = conn.execute(
+                    f"UPDATE OR IGNORE {tbl} SET profile_id = ? WHERE profile_id = ?",
+                    (new_id, old_id),
+                )
+                if tbl == "reference_track_labels":
+                    result["labels_migrated"] += moved.rowcount
+                conn.execute(f"DELETE FROM {tbl} WHERE profile_id = ?", (old_id,))
+            conn.execute("DELETE FROM tag_profiles WHERE profile_id = ?", (old_id,))
+            existing.discard(old_id)
+            result["renamed"].append({"from": old_id, "to": new_id})
+
+        # 3. Drop any remaining non-locked profile, but only if label-free.
+        leftovers = [
+            r["profile_id"] for r in
+            conn.execute("SELECT profile_id FROM tag_profiles").fetchall()
+            if r["profile_id"] not in target_ids
+        ]
+        for pid in leftovers:
+            has_labels = conn.execute(
+                "SELECT 1 FROM reference_track_labels WHERE profile_id = ? LIMIT 1",
+                (pid,),
+            ).fetchone()
+            if has_labels:
+                result["kept_with_labels"].append(pid)
+                continue
+            conn.execute("DELETE FROM tag_profiles WHERE profile_id = ?", (pid,))
+            result["dropped"].append(pid)
+
+    return result

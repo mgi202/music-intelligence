@@ -35,7 +35,7 @@ def init_db(db_path: str | None = None) -> None:
         conn.executescript(schema)
         # Backfills run AFTER schema.sql so the v2 tables they touch exist on
         # both fresh and upgraded databases. All backfills are idempotent.
-        _run_backfills(conn)
+        _run_backfills(conn, db_path)
         conn.commit()
         print(f"Database initialised: {db_path or 'default path'}")
         _report_tables(conn)
@@ -89,6 +89,18 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     if "inbox_dismissed_at" not in existing:
         conn.execute("ALTER TABLE tracks ADD COLUMN inbox_dismissed_at TEXT")
         print("Migration applied (v3): tracks.inbox_dismissed_at")
+
+    # 2026-06-26 (v4): own-front-end player — preferred playback videoId (e.g. an
+    # extended/video version). NULL = play ytm_track_id as before.
+    if "playback_video_id" not in existing:
+        conn.execute("ALTER TABLE tracks ADD COLUMN playback_video_id TEXT")
+        print("Migration applied (v4): tracks.playback_video_id")
+
+    # 2026-07-02 (Verdict Queue): per-track skip marker so the rapid tagging
+    # queue never re-serves a track Matthias skipped. NULL = still eligible.
+    if "verdict_skipped_at" not in existing:
+        conn.execute("ALTER TABLE tracks ADD COLUMN verdict_skipped_at TEXT")
+        print("Migration applied: tracks.verdict_skipped_at")
 
     # playlist_rules: sync-safety columns (v3)
     pr_cols = {row["name"] for row in conn.execute("PRAGMA table_info(playlist_rules)")}
@@ -154,13 +166,30 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         print("Migration applied (v4): listens.source widened to allow 'lastfm'")
 
 
-def _run_backfills(conn: sqlite3.Connection) -> None:
+def _run_backfills(conn: sqlite3.Connection, db_path: str | None = None) -> None:
     """Idempotent data backfills, run after schema.sql.
 
     v2 (RC1 §S3): register identity aliases for every existing track from its
     ytm_track_id and isrc columns. INSERT OR IGNORE makes this safe to re-run
     and a no-op on a fresh database (no tracks yet).
     """
+    # 2026-07-02 (Verdict Queue): reconcile tag_profiles to the locked vocab
+    # (TAG-VOCAB-DESIGN.md) — rename old spec profiles onto their locked
+    # successors (migrating any reference labels), insert the missing locked
+    # ones, and drop label-free leftovers. Idempotent; a no-op once settled.
+    # Runs on its own connection (db_conn) so it commits independently.
+    try:
+        from app.playlists.utility import reconcile_tag_profiles
+        summary = reconcile_tag_profiles(db_path)
+        if summary["inserted"] or summary["renamed"] or summary["dropped"]:
+            print(
+                f"Reconciled tag_profiles: +{len(summary['inserted'])} inserted, "
+                f"{len(summary['renamed'])} renamed, {len(summary['dropped'])} dropped, "
+                f"{summary['labels_migrated']} labels migrated"
+            )
+    except Exception as e:  # never block init on reconcile
+        print(f"tag_profiles reconcile skipped: {e}")
+
     rows = conn.execute(
         "SELECT track_pk, ytm_track_id, isrc FROM tracks "
         "WHERE ytm_track_id IS NOT NULL OR isrc IS NOT NULL"

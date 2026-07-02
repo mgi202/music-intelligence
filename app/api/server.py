@@ -63,6 +63,26 @@ class AddToPlaylistRequest(BaseModel):
     playlist_name: Optional[str] = None  # for the re-created membership row (undo)
 
 
+class PlaybackVersionRequest(BaseModel):
+    # A YouTube/YTM watch URL OR a raw 11-char videoId. None/empty clears it
+    # (revert to playing ytm_track_id).
+    video: Optional[str] = None
+
+
+def _parse_video_id(value: str | None) -> str | None:
+    """Extract an 11-char YouTube videoId from a URL or accept a raw id."""
+    if not value:
+        return None
+    value = value.strip()
+    import re
+    # Raw id
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", value):
+        return value
+    # URL forms: watch?v=ID, youtu.be/ID, /embed/ID
+    m = re.search(r"(?:v=|/embed/|youtu\.be/)([A-Za-z0-9_-]{11})", value)
+    return m.group(1) if m else None
+
+
 def _make_ytm_adapter():
     """Factory so endpoints get a YTM adapter and tests can monkeypatch it."""
     from app.ingestion.ytm_adapter import YouTubeMusicAdapter
@@ -89,6 +109,7 @@ def list_tracks(
     tags: Optional[str] = Query(None, description="Comma-separated tags (multi-select)"),
     tag_mode: str = Query("and", pattern="^(and|or)$", description="Combine multiple tags"),
     source_playlist: Optional[str] = Query(None, description="Filter to a YTM source playlist_id"),
+    pending_versions: bool = Query(False, description="Only tracks with a pending playback-version candidate"),
     rating: Optional[int] = Query(None, ge=0, le=4, description="0 = unrated"),
     status: Optional[str] = Query(None),
     sort: str = Query("added_desc", pattern="^(added_desc|added_asc|artist|title|rating_desc)$"),
@@ -143,6 +164,12 @@ def list_tracks(
         )
         params.append(source_playlist)
 
+    if pending_versions:
+        conditions.append(
+            "EXISTS (SELECT 1 FROM playback_version_candidates c "
+            "WHERE c.track_pk = t.track_pk AND c.status = 'pending')"
+        )
+
     if rating is not None:
         if rating == 0:
             conditions.append("t.personal_rating IS NULL")
@@ -173,7 +200,11 @@ def list_tracks(
             f"""SELECT t.track_pk, t.canonical_title, t.canonical_artist, t.album_title,
                        t.duration_ms, t.ytm_track_id, t.spotify_track_id, t.isrc,
                        t.personal_rating, t.rated_at, t.match_status, t.created_at,
-                       t.blocked_from_playlists, t.do_not_recommend, t.missing_since
+                       t.blocked_from_playlists, t.do_not_recommend, t.missing_since,
+                       t.playback_video_id,
+                       (SELECT COUNT(*) FROM playback_version_candidates c
+                         WHERE c.track_pk = t.track_pk AND c.status = 'pending')
+                           AS pending_version_count
                 FROM tracks t WHERE {where}
                 ORDER BY {order} LIMIT ? OFFSET ?""",
             params + [limit, offset],
@@ -331,10 +362,103 @@ def reference_readiness():
     return {"profiles": [reference_manager.profile_readiness(pid) for pid in ids]}
 
 
+@app.put("/api/tracks/{track_pk}/playback-version")
+def set_playback_version(track_pk: str, body: PlaybackVersionRequest):
+    """Set (or clear) the preferred playback videoId for a track — e.g. an
+    extended/video version. The in-app player uses this instead of ytm_track_id.
+    Pass an empty/null `video` to clear. Returns the resolved videoId."""
+    vid = _parse_video_id(body.video)
+    if body.video and vid is None:
+        raise HTTPException(400, "Could not parse a videoId from that input")
+    with db_conn() as conn:
+        result = conn.execute(
+            "UPDATE tracks SET playback_video_id = ?, updated_at = ? WHERE track_pk = ?",
+            (vid, datetime.now(timezone.utc).isoformat(), track_pk),
+        )
+        if result.rowcount == 0:
+            raise HTTPException(404, "Track not found")
+    # A manual set/clear is a decision — retire any pending auto-discovered
+    # candidates so the review queue doesn't keep offering this track.
+    from app.enrichment import version_discovery
+    version_discovery.supersede_pending_for_track(track_pk)
+    return {"track_pk": track_pk, "playback_video_id": vid}
+
+
+# ─────────────────────────────────────────
+# Extended-version discovery (auto-find + review queue)
+# ─────────────────────────────────────────
+
+@app.post("/api/tracks/{track_pk}/version-candidates/search")
+def search_version_candidates(track_pk: str):
+    """On-demand: search YTM for extended/club versions of this track, score,
+    persist, and (if near-certain) auto-apply. force=True so it runs even when a
+    version is already set. Returns the ranked candidates with full signal
+    columns so the FE can show the evidence."""
+    from app.enrichment import version_discovery
+    try:
+        candidates = version_discovery.discover_for_track(track_pk, force=True)
+    except ValueError:
+        raise HTTPException(404, "Track not found")
+    return {"track_pk": track_pk, "candidates": candidates}
+
+
+@app.get("/api/version-candidates")
+def list_version_candidates(status: str = Query("pending"), limit: int = Query(200, le=1000)):
+    """Review queue — candidates in a given status, joined to track identity.
+    Ordered so each track's best candidate leads, newest tracks first."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT c.candidate_id, c.track_pk, c.video_id, c.candidate_title,
+                      c.candidate_channel, c.candidate_duration_ms, c.result_type,
+                      c.title_similarity, c.artist_similarity, c.duration_score,
+                      c.keyword_score, c.uploader_score, c.veto_reason,
+                      c.confidence, c.status, c.discovered_at,
+                      t.canonical_title, t.canonical_artist, t.duration_ms
+                 FROM playback_version_candidates c
+                 JOIN tracks t ON t.track_pk = c.track_pk
+                WHERE c.status = ?
+                ORDER BY c.discovered_at DESC, c.track_pk,
+                         (c.veto_reason IS NOT NULL), c.confidence DESC
+                LIMIT ?""",
+            (status, limit),
+        ).fetchall()
+        return {"status": status, "candidates": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.post("/api/version-candidates/{candidate_id}/approve")
+def approve_version_candidate(candidate_id: int):
+    """Approve a candidate → write playback_video_id, supersede siblings.
+    404 if unknown, 409 if already decided."""
+    from app.enrichment import version_discovery
+    try:
+        return version_discovery.apply_candidate(candidate_id)
+    except version_discovery.AlreadyDecided as e:
+        raise HTTPException(409, str(e))
+    except ValueError:
+        raise HTTPException(404, "Candidate not found")
+
+
+@app.post("/api/version-candidates/{candidate_id}/reject")
+def reject_version_candidate(candidate_id: int):
+    """Sticky reject — this (track, video) never resurfaces. 404 if unknown."""
+    from app.enrichment import version_discovery
+    try:
+        version_discovery.reject_candidate(candidate_id)
+    except ValueError:
+        raise HTTPException(404, "Candidate not found")
+    return {"candidate_id": candidate_id, "status": "rejected"}
+
+
 @app.get("/api/reference/profiles")
 def reference_profiles():
-    """The profile vocabulary, grouped-friendly (id, tag_name, layer). Powers the
-    tap-palette in the tag box so tagging is recognition, not recall."""
+    """The profile vocabulary, grouped-friendly (id, tag_name, layer, definition).
+    Powers the tap-palette and the Verdict-Queue micro-questions so tagging is
+    recognition, not recall. `tiebreakers` carries the two functional-layer
+    disambiguation rules rendered in the queue's "?" expander."""
+    from app.playlists.utility import FUNCTIONAL_TIEBREAKERS
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -343,7 +467,47 @@ def reference_profiles():
         ).fetchall()
     finally:
         conn.close()
-    return {"profiles": [dict(r) for r in rows]}
+    return {"profiles": [dict(r) for r in rows], "tiebreakers": FUNCTIONAL_TIEBREAKERS}
+
+
+# ─────────────────────────────────────────
+# Verdict Queue — rapid, suggestion-first tagging (TAG-VOCAB-DESIGN.md)
+# ─────────────────────────────────────────
+
+@app.get("/api/verdict/queue")
+def verdict_queue(limit: int = Query(20, ge=1, le=100)):
+    """Tracks ordered by training value, each with ranked suggestions + evidence
+    and the data the card needs (IFrame id, effective tags, playlist chips)."""
+    from app.tags import verdict_queue as vq
+    return vq.build_queue(limit=limit)
+
+
+@app.post("/api/tracks/{track_pk}/verdict/reject/{profile_id}")
+def verdict_reject(track_pk: str, profile_id: str):
+    """Reject a suggestion → sticky near_miss exemplar for that profile
+    ('sounds like but isn't'). The tag is NOT applied."""
+    from app.tags import reference_manager
+    try:
+        return reference_manager.reject_suggestion(track_pk, profile_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/tracks/{track_pk}/verdict/skip")
+def verdict_skip(track_pk: str):
+    """Skip a track in the Verdict Queue — it never gets re-served."""
+    from app.tags import verdict_queue as vq
+    try:
+        return vq.skip_track(track_pk)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/verdict/unskip-all")
+def verdict_unskip_all():
+    """Re-serve every previously-skipped track (UI footer escape hatch)."""
+    from app.tags import verdict_queue as vq
+    return vq.unskip_all()
 
 
 @app.get("/api/tags")

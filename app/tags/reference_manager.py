@@ -35,6 +35,9 @@ CREATED_BY_MANUAL = "manual"
 CREATED_BY_TAG = "auto:tag"          # positive, derived from a manual tag
 CREATED_BY_OPPOSING = "auto:opposing"  # negative, derived from an opposing positive
 CREATED_BY_VETO = "veto"             # near_miss, user said "not a good example"
+CREATED_BY_VERDICT_REJECT = "verdict_reject"  # near_miss, Verdict-Queue "not this one"
+# Sticky near_miss markers — labels derivation must never re-promote to positive.
+_STICKY_NEAR_MISS = (CREATED_BY_VETO, CREATED_BY_VERDICT_REJECT)
 _AUTO_PREFIX = "auto:"
 
 # Opposing-profiles map — which profiles are acoustically/contextually far
@@ -44,25 +47,24 @@ _AUTO_PREFIX = "auto:"
 # Profiles NOT listed as opposites are treated as "too close to use as a clean
 # negative" (e.g. hypnotic-rolling vs peak-time-dark-techno overlap heavily).
 # Edit freely — this is the one piece of hand-tuning the system relies on.
+# Keyed on the LOCKED vocabulary (TAG-VOCAB-DESIGN.md). Opposites are declared
+# ONLY WITHIN a layer — never across. A track's set-role (functional) and its
+# listening moment (personal) are orthogonal: a peak-time cut can equally be
+# gym or drive music, so a functional positive must NOT auto-derive a personal
+# negative (that contradiction would fight the Verdict Queue, which co-tags
+# both layers on one commit). Within a layer, a positive of one profile is a
+# clean acoustic negative of a genuinely contrasting sibling. Functional is
+# single-select in the UI, so opposing set-roles can never both be positive on
+# one track. Profiles not named as opposites are treated as too close to use as
+# an automatic negative.
 _OPPOSING_PROFILES_DECL: dict[str, tuple[str, ...]] = {
-    "peak-time-dark-techno": (
-        "focus-minimal", "melodic-late-night", "late-night-drive", "afterhours-dubby",
-    ),
-    "warehouse-industrial": (
-        "focus-minimal", "melodic-late-night", "late-night-drive", "euphoric-anthem",
-    ),
-    "euphoric-anthem": (
-        "warehouse-industrial", "focus-minimal", "afterhours-dubby",
-    ),
-    "gym-aggressive": (
-        "focus-minimal", "afterhours-dubby", "late-night-drive", "melodic-late-night",
-    ),
-    "warm-up-groove": (
-        "peak-time-dark-techno", "warehouse-industrial", "gym-aggressive",
-    ),
-    "hypnotic-rolling": (
-        "euphoric-anthem", "gym-aggressive",
-    ),
+    # ── functional (set arc) ──
+    "peak-time": ("warm-up", "breather", "afterhours"),
+    "anthem": ("breather", "afterhours"),
+    "closer": ("peak-time", "warm-up"),
+    # ── personal (listening moment) ──
+    "gym": ("wind-down", "deep-listen", "focus-work"),
+    "pre-night-out": ("wind-down", "focus-work"),
 }
 
 
@@ -637,3 +639,46 @@ def unveto_exemplar(
         )
     recompute_track_references(track_pk, db_path=db_path)
     return {"track_pk": track_pk, "profile_id": profile_id, "vetoed": False}
+
+
+def reject_suggestion(
+    track_pk: str,
+    profile_id: str,
+    db_path: str | None = None,
+) -> dict:
+    """
+    Verdict-Queue 'not this one' — the track sounds like the profile but ISN'T.
+
+    Records a sticky near_miss exemplar (created_by='verdict_reject'), which is
+    exactly the hard-negative training signal the classifier wants. Sticky like
+    a veto: derivation can never promote it to positive, and the reconcile sweep
+    never removes it. Idempotent. The tag itself is NOT applied.
+
+    If the track was somehow already a positive for this profile, it is demoted.
+    """
+    with db_conn(db_path) as conn:
+        if not conn.execute(
+            "SELECT 1 FROM tracks WHERE track_pk = ?", (track_pk,)
+        ).fetchone():
+            raise ValueError(f"Track not found: {track_pk}")
+        if not conn.execute(
+            "SELECT 1 FROM tag_profiles WHERE profile_id = ?", (profile_id,)
+        ).fetchone():
+            raise ValueError(f"Profile not found: {profile_id}")
+        # A near_miss cannot coexist with a positive for the same profile.
+        conn.execute(
+            "DELETE FROM reference_track_labels "
+            "WHERE track_pk = ? AND profile_id = ? AND label_type = 'positive'",
+            (track_pk, profile_id),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO reference_track_labels
+                (track_pk, profile_id, label_type, confidence, notes,
+                 reference_source, created_by)
+            VALUES (?, ?, 'near_miss', 1.0, 'verdict reject: sounds like but is not',
+                    'review_queue', ?)
+            """,
+            (track_pk, profile_id, CREATED_BY_VERDICT_REJECT),
+        )
+    return {"track_pk": track_pk, "profile_id": profile_id, "rejected": True}

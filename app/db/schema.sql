@@ -42,6 +42,14 @@ CREATE TABLE IF NOT EXISTS tracks (
     do_not_recommend            INTEGER NOT NULL DEFAULT 0,
     -- Inbox workflow (v3): explicit dismissal timestamp.
     inbox_dismissed_at          TEXT,
+    -- Own-front-end player (v4, 2026-06-26): preferred playback videoId. When set
+    -- (e.g. an extended/video version YTM swaps out of playlists), the in-app
+    -- player plays THIS id instead of ytm_track_id. Playback-by-id is not swapped,
+    -- only playlist membership is — so this is how extended cuts get heard.
+    playback_video_id           TEXT,
+    -- Verdict Queue (2026-07-02): set when Matthias skips a track in the rapid
+    -- tagging tab, so the queue never re-serves it. NULL = eligible.
+    verdict_skipped_at          TEXT,
     created_at                  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (match_status IN (
@@ -96,6 +104,45 @@ CREATE INDEX IF NOT EXISTS idx_audio_candidates_track       ON audio_source_cand
 CREATE INDEX IF NOT EXISTS idx_audio_candidates_confidence  ON audio_source_candidates(confidence);
 CREATE INDEX IF NOT EXISTS idx_audio_candidates_lawful      ON audio_source_candidates(lawful_basis);
 CREATE INDEX IF NOT EXISTS idx_audio_candidates_approved    ON audio_source_candidates(approved, rejected);
+
+-- ─────────────────────────────────────────
+-- Extended/alternate playback-version candidates (2026-07-02).
+-- Playback-only: feeds tracks.playback_video_id for the own-FE player.
+-- Deliberately separate from audio_source_candidates (no lawful_basis —
+-- nothing is downloaded, this is which id the IFrame player streams).
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS playback_version_candidates (
+    candidate_id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    track_pk                TEXT NOT NULL,
+    video_id                TEXT NOT NULL,             -- 11-char YouTube id
+    candidate_title         TEXT,
+    candidate_channel       TEXT,                      -- uploader/artist name shown by YTM
+    candidate_duration_ms   INTEGER,
+    result_type             TEXT,                      -- 'song' | 'video' (YTM search scope it came from)
+    -- Signals (0..1 each; see scorer)
+    title_similarity        REAL DEFAULT 0.0,
+    artist_similarity       REAL DEFAULT 0.0,
+    duration_score          REAL DEFAULT 0.0,
+    keyword_score           REAL DEFAULT 0.0,
+    uploader_score          REAL DEFAULT 0.0,
+    veto_reason             TEXT,                      -- non-NULL ⇒ confidence forced to 0
+    confidence              REAL DEFAULT 0.0,
+    status                  TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+        'pending',        -- awaiting Matthias
+        'auto_applied',   -- ≥0.92 + gates; wrote playback_video_id
+        'approved',       -- manually approved; wrote playback_video_id
+        'rejected',       -- manually rejected — STICKY, never resurfaces
+        'superseded'      -- a different candidate was applied for this track
+    )),
+    discovered_at           TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    decided_at              TEXT,
+    created_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (track_pk, video_id),
+    FOREIGN KEY (track_pk) REFERENCES tracks(track_pk) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_pvc_track  ON playback_version_candidates(track_pk);
+CREATE INDEX IF NOT EXISTS idx_pvc_status ON playback_version_candidates(status);
 
 CREATE TABLE IF NOT EXISTS audio_features (
     track_pk                TEXT PRIMARY KEY,

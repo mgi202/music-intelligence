@@ -7,7 +7,7 @@ import pytest
 from tests.conftest import insert_track
 
 
-def _seed_profile(db, profile_id="peak-time-dark-techno"):
+def _seed_profile(db, profile_id="peak-time"):
     from app.playlists.utility import seed_starter_tag_profiles
     seed_starter_tag_profiles(db)
     return profile_id
@@ -148,9 +148,10 @@ def test_tag_maps_to_profile(db):
     _seed_profile(db)
     from app.tags.reference_manager import profiles_for_tag
     # Exact tag_name match (separator-insensitive).
-    assert "peak-time-dark-techno" in profiles_for_tag("peak-time-dark-techno", db_path=db)
-    # Context-term match: 'dark techno' is a context term of the peak profile.
-    assert "peak-time-dark-techno" in profiles_for_tag("dark techno", db_path=db)
+    assert "peak-time" in profiles_for_tag("peak-time", db_path=db)
+    assert "peak-time" in profiles_for_tag("peak time", db_path=db)
+    # Context-term match: 'peaktime' is a context term of the peak profile.
+    assert "peak-time" in profiles_for_tag("peaktime", db_path=db)
     # A tag that maps to nothing returns empty — no false positives.
     assert profiles_for_tag("polka", db_path=db) == []
 
@@ -165,7 +166,7 @@ def test_recompute_creates_positive_and_opposing_negatives(db):
     insert_track(conn, "t1", canonical_artist="Surgeon")
     conn.execute(
         "INSERT INTO track_tags (track_pk, tag, tag_type, source) "
-        "VALUES ('t1','peak-time-dark-techno','private_manual','manual')"
+        "VALUES ('t1','peak-time','private_manual','manual')"
     )
     conn.commit(); conn.close()
 
@@ -174,12 +175,12 @@ def test_recompute_creates_positive_and_opposing_negatives(db):
     labels = list_reference_labels(track_pk="t1", db_path=db)
     by_type = {(l["profile_id"], l["label_type"]) for l in labels}
     # Positive for the tagged profile.
-    assert ("peak-time-dark-techno", "positive") in by_type
+    assert ("peak-time", "positive") in by_type
     # Negative for each opposing profile.
-    for opp in opposing_profiles_map()["peak-time-dark-techno"]:
+    for opp in opposing_profiles_map()["peak-time"]:
         assert (opp, "negative") in by_type
     # It is never a negative of itself.
-    assert ("peak-time-dark-techno", "negative") not in by_type
+    assert ("peak-time", "negative") not in by_type
 
 
 def test_removing_tag_retracts_references(db):
@@ -190,7 +191,7 @@ def test_removing_tag_retracts_references(db):
     insert_track(conn, "t1")
     conn.execute(
         "INSERT INTO track_tags (track_pk, tag, tag_type, source) "
-        "VALUES ('t1','peak-time-dark-techno','private_manual','manual')"
+        "VALUES ('t1','peak-time','private_manual','manual')"
     )
     conn.commit()
     recompute_track_references("t1", db_path=db)
@@ -213,28 +214,28 @@ def test_veto_demotes_and_blocks_repromotion(db):
     insert_track(conn, "t1")
     conn.execute(
         "INSERT INTO track_tags (track_pk, tag, tag_type, source) "
-        "VALUES ('t1','peak-time-dark-techno','private_manual','manual')"
+        "VALUES ('t1','peak-time','private_manual','manual')"
     )
     conn.commit(); conn.close()
     recompute_track_references("t1", db_path=db)
 
-    veto_exemplar("t1", "peak-time-dark-techno", db_path=db)
+    veto_exemplar("t1", "peak-time", db_path=db)
     labels = {(l["profile_id"], l["label_type"]) for l in
               list_reference_labels(track_pk="t1", db_path=db)}
-    assert ("peak-time-dark-techno", "positive") not in labels
-    assert ("peak-time-dark-techno", "near_miss") in labels
+    assert ("peak-time", "positive") not in labels
+    assert ("peak-time", "near_miss") in labels
 
     # Re-running derivation must NOT re-promote a vetoed track.
     recompute_track_references("t1", db_path=db)
     labels = {(l["profile_id"], l["label_type"]) for l in
               list_reference_labels(track_pk="t1", db_path=db)}
-    assert ("peak-time-dark-techno", "positive") not in labels
+    assert ("peak-time", "positive") not in labels
 
     # Un-veto restores the positive.
-    unveto_exemplar("t1", "peak-time-dark-techno", db_path=db)
+    unveto_exemplar("t1", "peak-time", db_path=db)
     labels = {(l["profile_id"], l["label_type"]) for l in
               list_reference_labels(track_pk="t1", db_path=db)}
-    assert ("peak-time-dark-techno", "positive") in labels
+    assert ("peak-time", "positive") in labels
 
 
 def test_apply_tag_auto_derives_via_hook(db):
@@ -248,14 +249,14 @@ def test_apply_tag_auto_derives_via_hook(db):
     conn.commit(); conn.close()
 
     # No db_path → uses the monkeypatched default DB (same as the API path).
-    apply_tag("t1", "peak-time-dark-techno")
+    apply_tag("t1", "peak-time")
     labels = {(l["profile_id"], l["label_type"]) for l in
               list_reference_labels(track_pk="t1", db_path=db)}
-    assert ("peak-time-dark-techno", "positive") in labels
+    assert ("peak-time", "positive") in labels
 
     # Removing the tag retracts it, same path.
     from app.tags.tag_manager import remove_tag
-    remove_tag("t1", "peak-time-dark-techno")
+    remove_tag("t1", "peak-time")
     assert list_reference_labels(track_pk="t1", db_path=db) == []
 
 
@@ -268,7 +269,7 @@ def test_backfill_is_idempotent(db):
         insert_track(conn, f"t{i}", canonical_artist=f"A{i}")
         conn.execute(
             "INSERT INTO track_tags (track_pk, tag, tag_type, source) "
-            "VALUES (?, 'peak-time-dark-techno','private_manual','manual')", (f"t{i}",))
+            "VALUES (?, 'peak-time','private_manual','manual')", (f"t{i}",))
     conn.commit(); conn.close()
 
     first = backfill_all_references(db_path=db)

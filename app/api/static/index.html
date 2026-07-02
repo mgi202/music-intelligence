@@ -71,6 +71,17 @@
   #playerbar .nowplaying { font-size: 12px; color: var(--dim); margin-bottom: 6px; display: flex; justify-content: space-between; }
   #playerbar .nowplaying b { color: var(--text); }
   #playerbar .closebtn { background: none; border: none; color: var(--dim); cursor: pointer; font-size: 14px; }
+  #playerbar .pb-inner { display: flex; gap: 12px; align-items: center; }
+  #ytplayer-wrap { width: 120px; height: 68px; flex-shrink: 0; border-radius: 6px; overflow: hidden; background: #000; }
+  #ytplayer, #ytplayer-wrap iframe { width: 120px; height: 68px; border: 0; }
+  .pb-main { flex: 1; min-width: 0; }
+  .pb-controls { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+  .pb-controls button { background: none; border: none; color: var(--text); font-size: 16px; cursor: pointer; padding: 2px 4px; line-height: 1; }
+  .pb-controls button:hover { color: var(--accent); }
+  .pb-time { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; min-width: 34px; text-align: center; }
+  .pb-track { flex: 1; height: 6px; background: var(--panel2); border-radius: 999px; cursor: pointer; overflow: hidden; }
+  .pb-fill { height: 100%; width: 0; background: var(--accent); border-radius: 999px; }
+  .track.playing { box-shadow: inset 3px 0 0 var(--accent); }
   #ytplayer { width: 100%; height: 80px; border: none; border-radius: 8px; }
 
   /* Modal */
@@ -111,6 +122,29 @@
   .menu .sheet button.danger { color: var(--danger); }
   .menu .sheet .menuhint { padding: 8px 14px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); }
   .menu .sheet .menusep { height: 1px; background: #2b2b38; margin: 6px 8px; }
+  /* Version-discovery dialog */
+  .verdlg { max-height: 82vh; overflow-y: auto; }
+  .verbtn { width: 100%; text-align: center !important; background: var(--panel2) !important; border: 1px solid var(--accent-dim) !important; color: var(--accent) !important; font-weight: 600; border-radius: 8px; margin: 4px 0; }
+  .verresults { padding: 2px 6px; }
+  .verhint { color: var(--dim); font-size: 12.5px; padding: 10px 8px; }
+  .vrow { display: flex; gap: 8px; align-items: flex-start; padding: 8px 6px; border-bottom: 1px solid #23232e; }
+  .vrow.isveto { opacity: .62; }
+  .vrow .vmain { flex: 1; min-width: 0; }
+  .vrow .vtitle { font-size: 13px; color: var(--text); }
+  .vrow .vsub { font-size: 11.5px; color: var(--dim); margin-top: 2px; }
+  .vrow .vev { font-size: 10.5px; color: #6f7080; margin-top: 3px; }
+  .vrow .vact { display: flex; gap: 4px; flex-shrink: 0; }
+  .vrow .vact button { background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); border-radius: 7px; padding: 5px 9px; font-size: 12px; cursor: pointer; }
+  .vrow .vact button.danger { color: var(--danger); }
+  .vbad { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 999px; margin-left: 4px; vertical-align: middle; }
+  .vbad.hi { background: #16351f; color: #57d97e; }
+  .vbad.mid { background: #33300f; color: #d8c24a; }
+  .vbad.lo { background: #2b2b38; color: var(--dim); }
+  .vbad.veto { background: #3a1620; color: #e77; }
+  .verpaste { display: flex; gap: 6px; padding: 4px 6px; }
+  .verpaste input { flex: 1; min-width: 0; background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 8px 10px; border-radius: 8px; font-size: 13px; outline: none; }
+  .verpaste button { background: var(--accent); color: #111; border: none; border-radius: 8px; padding: 8px 14px; font-weight: 600; cursor: pointer; }
+  .pendbadge { display: inline-block; font-size: 10px; font-weight: 700; color: var(--accent); background: rgba(120,200,255,.10); border: 1px solid var(--accent-dim); border-radius: 999px; padding: 0 6px; margin-left: 6px; cursor: pointer; }
   /* Training (reference-readiness) view */
   .trainhead { font-size: 13px; color: var(--dim); margin: 4px 2px 12px; }
   .trainhead b { color: var(--text); }
@@ -143,6 +177,7 @@
   .filterbar select { flex: 1; min-width: 0; background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 6px 10px; border-radius: 999px; font-size: 12.5px; outline: none; }
   .filterbar select.sortsel { flex: 0 0 auto; }
   .modebtn { flex-shrink: 0; background: var(--panel2); border: 1px solid var(--accent-dim); color: var(--accent); padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 700; cursor: pointer; letter-spacing: 1px; }
+  .modebtn.on { background: var(--accent); color: #111; border-color: var(--accent); }
 
   /* Source-playlist chips on a track card */
   .plrow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
@@ -173,6 +208,51 @@
   .vocab .vbtn { flex-shrink: 0; background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 5px 10px; border-radius: 8px; font-size: 12px; cursor: pointer; }
   .vocab .vbtn.on { background: var(--danger); color: #111; border-color: var(--danger); font-weight: 600; }
   .vocabsearch { width: 100%; background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 9px 12px; border-radius: var(--radius); font-size: 14px; outline: none; margin-bottom: 10px; }
+
+  /* ── Verdict Queue ── */
+  .vq-strip { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--dim); margin: 2px 2px 12px; }
+  .vq-strip b { color: var(--text); }
+  .vq-strip .vq-adv { color: var(--accent); }
+  .vq-card { background: var(--panel); border: 1px solid #23232e; border-radius: 14px; padding: 16px; }
+  .vq-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+  .vq-title { font-size: 17px; font-weight: 700; color: var(--text); line-height: 1.25; }
+  .vq-artist { font-size: 13px; color: var(--dim); margin-top: 2px; }
+  .vq-album { font-size: 11.5px; color: var(--dim); margin-top: 1px; font-style: italic; }
+  .vq-play { width: 44px; height: 44px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--accent-dim); background: var(--panel2); color: var(--accent); font-size: 17px; cursor: pointer; }
+  .vq-play:active { background: var(--panel); }
+  .vq-existing { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+  .vq-existing .tag { font-size: 10.5px; padding: 2px 8px; border-radius: 999px; background: var(--panel2); color: var(--dim); }
+  .vq-existing .tag.manual { background: #2a2a14; color: var(--accent); }
+  .vq-seclbl { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); margin: 16px 2px 7px; display: flex; align-items: center; gap: 8px; }
+  .vq-seclbl .vq-help { cursor: pointer; color: var(--accent); border: 1px solid var(--accent-dim); border-radius: 50%; width: 16px; height: 16px; line-height: 14px; text-align: center; font-size: 11px; font-weight: 700; }
+  .vq-skiphint { margin-left: auto; font-size: 10.5px; color: var(--dim); text-transform: none; letter-spacing: 0; }
+  .vq-sugg { display: flex; flex-direction: column; gap: 8px; }
+  .vq-sugg.blurred { filter: blur(7px); opacity: .5; pointer-events: none; transition: filter .15s; }
+  .vq-reveal { text-align: center; font-size: 12px; color: var(--accent); border: 1px dashed var(--accent-dim); border-radius: 8px; padding: 8px; cursor: pointer; margin-bottom: 8px; }
+  .vq-scard { border: 1px solid #2b2b38; border-radius: 10px; padding: 10px 12px; background: var(--panel2); }
+  .vq-scard.accepted { border-color: var(--accent); background: #1d2410; }
+  .vq-scard.rejected { border-color: var(--danger); opacity: .6; }
+  .vq-srow { display: flex; align-items: center; gap: 8px; }
+  .vq-skey { font-size: 10px; color: var(--dim); border: 1px solid #2b2b38; border-radius: 5px; padding: 1px 5px; font-variant-numeric: tabular-nums; }
+  .vq-sname { font-size: 14px; font-weight: 600; color: var(--text); flex: 1; }
+  .vq-slayer { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+  .vq-sbtn { border: 1px solid #2b2b38; background: var(--panel); color: var(--text); border-radius: 7px; padding: 5px 11px; font-size: 12px; cursor: pointer; }
+  .vq-sbtn.yes { border-color: var(--accent-dim); color: var(--accent); }
+  .vq-sbtn.no { border-color: #4a2530; color: var(--danger); }
+  .vq-sbtn.on { background: var(--accent); color: #111; border-color: var(--accent); font-weight: 700; }
+  .vq-sbtn.no.on { background: var(--danger); color: #111; border-color: var(--danger); }
+  .vq-ev { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+  .vq-ev span { font-size: 10.5px; color: var(--dim); background: var(--panel); border: 1px solid #23232e; border-radius: 6px; padding: 1px 7px; }
+  .vq-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .vq-chip { background: var(--panel2); border: 1px solid #2b2b38; color: var(--dim); padding: 6px 13px; border-radius: 999px; font-size: 13px; cursor: pointer; user-select: none; }
+  .vq-chip.on { background: var(--accent); color: #111; border-color: var(--accent); font-weight: 700; }
+  .vq-foot { display: flex; gap: 8px; margin-top: 18px; }
+  .vq-foot button { flex: 1; padding: 12px; border-radius: 9px; border: 1px solid #2b2b38; background: var(--panel2); color: var(--text); font-size: 14px; font-weight: 600; cursor: pointer; }
+  .vq-foot button.commit { background: var(--accent); color: #111; border-color: var(--accent); }
+  .vq-foot button.skip { flex: 0 0 auto; color: var(--dim); }
+  .vq-toggle { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--dim); cursor: pointer; }
+  .vq-note { font-size: 11px; color: var(--dim); margin-top: 10px; text-align: center; }
+  .vq-note a { color: var(--accent); cursor: pointer; }
 </style>
 </head>
 <body>
@@ -201,6 +281,7 @@
       <option value="tracks_desc">Tracks ↓</option>
     </select>
     <button id="tagmode" class="modebtn" style="display:none">AND</button>
+    <button id="pendingverbtn" class="modebtn" title="Only tracks with a playback-version awaiting review">⇱ Versions</button>
   </div>
   <nav class="tabs">
     <button id="tab-home" class="active">Home</button>
@@ -208,6 +289,7 @@
     <button id="tab-inbox">Inbox <span id="inboxbadge" class="badge" style="display:none"></span></button>
     <button id="tab-playlists">Playlists</button>
     <button id="tab-review">Review <span id="reviewbadge" class="badge" style="display:none"></span></button>
+    <button id="tab-verdict">Verdict</button>
     <button id="tab-tags">Tags</button>
     <button id="tab-training">Training</button>
   </nav>
@@ -224,30 +306,47 @@
   <div id="inbox" style="display:none"></div>
   <div id="playlists" style="display:none"></div>
   <div id="review" style="display:none"></div>
+  <div id="verdict" style="display:none"></div>
   <div id="tags" style="display:none"></div>
   <div id="training" style="display:none"></div>
 </main>
 
 <div id="playerbar">
-  <div class="nowplaying">
-    <span id="np"></span>
-    <span>
-      <a id="np-ytm" href="#" target="_blank" style="color:var(--accent);font-size:12px;text-decoration:none;margin-right:12px">Open in YTM ↗</a>
-      <button class="closebtn" onclick="closePlayer()">✕</button>
-    </span>
+  <div class="pb-inner">
+    <div id="ytplayer-wrap"><div id="ytplayer"></div></div>
+    <div class="pb-main">
+      <div class="nowplaying">
+        <span id="np"></span>
+        <span>
+          <a id="np-ytm" href="#" target="_blank" style="color:var(--accent);font-size:12px;text-decoration:none;margin-right:12px">Open in YTM ↗</a>
+          <button class="closebtn" onclick="closePlayer()">✕</button>
+        </span>
+      </div>
+      <div class="pb-controls">
+        <button id="pb-prev" onclick="prevTrack()" title="Previous">⏮</button>
+        <button id="pb-play" onclick="togglePlay()" title="Play / pause">▶</button>
+        <button id="pb-next" onclick="nextTrack()" title="Next">⏭</button>
+        <span id="pb-cur" class="pb-time">0:00</span>
+        <div id="pb-track" class="pb-track"><div id="pb-fill" class="pb-fill"></div></div>
+        <span id="pb-dur" class="pb-time">0:00</span>
+      </div>
+    </div>
   </div>
-  <iframe id="ytplayer" allow="autoplay; encrypted-media"></iframe>
 </div>
 
 <div class="toast" id="toast"></div>
 
 <script>
 const state = {
-  q: "", rating: "", tags: [], tagMode: "and", sourcePlaylist: "", inboxPlaylist: "", playlistSort: "name_asc",
+  q: "", rating: "", tags: [], tagMode: "and", sourcePlaylist: "", inboxPlaylist: "", playlistSort: "name_asc", pendingVersions: false,
   offset: 0, limit: 100, total: 0,
   tracks: [], allTags: [], vocab: [], sourcePlaylists: [],
   reviewSub: "duplicates", reviewPairs: [], view: "library",
   isMobile: /Android|iPhone|iPad/i.test(navigator.userAgent),
+  queue: [], qIndex: -1,
+  // Verdict Queue
+  vq: [], vqIndex: 0, vqSel: null, vqReadiness: null, vqLastAdv: "",
+  vqGuessFirst: localStorage.getItem("vqGuessFirst") === "1", vqRevealed: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -278,6 +377,7 @@ async function loadTracks(append = false) {
   if (state.rating !== "") p.set("rating", state.rating);
   if (state.tags.length) { p.set("tags", state.tags.join(",")); p.set("tag_mode", state.tagMode); }
   if (state.sourcePlaylist) p.set("source_playlist", state.sourcePlaylist);
+  if (state.pendingVersions) p.set("pending_versions", "true");
   const data = await api(`/api/tracks?${p}`);
   state.total = data.total;
   state.tracks = append ? state.tracks.concat(data.tracks) : data.tracks;
@@ -312,9 +412,10 @@ function trackCard(t, opts = {}) {
   return `
     <div class="track" id="tr-${t.track_pk}">
       <div class="row1">
-        <button class="playbtn" ${t.ytm_track_id ? "" : "disabled"} onclick="play('${t.ytm_track_id}', '${esc(t.canonical_artist)} — ${esc(t.canonical_title)}')">▶</button>
+        <button class="playbtn" ${(t.ytm_track_id || t.playback_video_id) ? "" : "disabled"} onclick="playFromList('${t.track_pk}')" title="Play from here">▶</button>
         <div class="meta">
-          <div class="title">${esc(t.canonical_title)}</div>
+          <div class="title">${esc(t.canonical_title)}${t.playback_video_id ? ' <span class="vbad hi" title="plays a set extended/video version">· ext</span>' : ""}${
+            t.pending_version_count ? ` <span class="pendbadge" title="playback versions to review" onclick="versionDialog('${t.track_pk}')">⇱ ${t.pending_version_count}</span>` : ""}</div>
           <div class="artist">${esc(t.canonical_artist)}${t.album_title ? " · " + esc(t.album_title) : ""}</div>
         </div>
         ${starButtons(t)}
@@ -362,6 +463,10 @@ async function trackMenu(pk) {
 
   bg.innerHTML = `<div class="sheet">
     ${refSection}
+    <button onclick="versionDialog('${pk}');this.closest('.menu').remove()">
+      🔎 ${t.playback_video_id ? "Change playback version" : "Find extended / video version"}${
+        t.pending_version_count ? ` <span class="vbad mid">${t.pending_version_count} to review</span>` : ""}</button>
+    <div class="menusep"></div>
     <button onclick="setFlag('${pk}','blocked_from_playlists',${t.blocked_from_playlists ? 0 : 1});this.closest('.menu').remove()">
       ${t.blocked_from_playlists ? "Unblock" : "Block from playlists"}</button>
     <button onclick="setFlag('${pk}','do_not_recommend',${t.do_not_recommend ? 0 : 1});this.closest('.menu').remove()">
@@ -371,6 +476,123 @@ async function trackMenu(pk) {
     <button onclick="this.closest('.menu').remove()">Cancel</button>
   </div>`;
   document.body.appendChild(bg);
+}
+
+// Reload whichever list is on screen (shared by the version flow).
+function reloadCurrent() {
+  if (state.view === "library") loadTracks();
+  else if (state.view === "inbox") loadInbox();
+  else if (state.view === "home") loadHome();
+}
+function fmtDurMs(ms) {
+  const s = Math.round((ms || 0) / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+// Two-part dialog: auto-search YTM for extended/club versions (scored, one-click
+// apply/reject with the evidence shown), plus the manual paste-a-link fallback.
+async function versionDialog(pk) {
+  const t = (state.tracks.concat(state.inbox || [])).find(x => x.track_pk === pk) || {};
+  const bg = document.createElement("div");
+  bg.className = "menu";
+  bg.onclick = (ev) => { if (ev.target === bg) bg.remove(); };
+  bg.innerHTML = `<div class="sheet verdlg">
+    <div class="menuhint">Playback version — ${esc(t.canonical_title || "")}</div>
+    <button class="verbtn" id="ver-search">🔎 Search YTM for the extended version</button>
+    <div id="ver-results" class="verresults"></div>
+    <div class="menusep"></div>
+    <div class="menuhint">Or paste a link / videoId</div>
+    <div class="verpaste">
+      <input id="ver-paste" type="text" placeholder="YTM link or videoId — leave blank to clear"
+             value="${t.playback_video_id ? `https://music.youtube.com/watch?v=${t.playback_video_id}` : ""}">
+      <button id="ver-save">Save</button>
+    </div>
+    <button onclick="this.closest('.menu').remove()" style="margin-top:6px">Close</button>
+  </div>`;
+  document.body.appendChild(bg);
+  state.verCache = { pk, t, cands: [] };
+
+  bg.querySelector("#ver-search").onclick = async () => {
+    const res = bg.querySelector("#ver-results");
+    res.innerHTML = '<div class="verhint">Searching YouTube Music…</div>';
+    try {
+      const data = await api(`/api/tracks/${pk}/version-candidates/search`, { method: "POST", body: "{}" });
+      state.verCache = { pk, t, cands: data.candidates };
+      renderVersionCandidates(res);
+      reloadCurrent();  // an auto-apply may have set the version already
+    } catch (e) { res.innerHTML = `<div class="verhint">Search failed: ${esc(e.message)}</div>`; }
+  };
+  bg.querySelector("#ver-save").onclick = async () => {
+    const v = bg.querySelector("#ver-paste").value.trim();
+    try {
+      const r = await api(`/api/tracks/${pk}/playback-version`, { method: "PUT", body: JSON.stringify({ video: v }) });
+      toast(r.playback_video_id ? "Playback version set ✓" : "Reverted to normal version");
+      bg.remove();
+      reloadCurrent();
+    } catch (e) { toast("Couldn't read that link — try the watch URL"); }
+  };
+}
+
+function renderVersionCandidates(el) {
+  const { t, cands } = state.verCache;
+  if (!cands.length) { el.innerHTML = '<div class="verhint">No candidates found. Try the paste box below.</div>'; return; }
+  const canon = t.duration_ms ? fmtDurMs(t.duration_ms) : "?";
+  el.innerHTML = cands.map(c => {
+    const cd = c.candidate_duration_ms ? fmtDurMs(c.candidate_duration_ms) : "?";
+    const conf = Math.round((c.confidence || 0) * 100);
+    const applied = (c.status === "auto_applied" || c.status === "approved");
+    const badge = c.veto_reason
+      ? `<span class="vbad veto" title="disqualified">⚠ ${esc(c.veto_reason)}</span>`
+      : `<span class="vbad ${conf >= 92 ? "hi" : conf >= 60 ? "mid" : "lo"}">${conf}%</span>`;
+    const ev = `title ${Math.round(c.title_similarity * 100)}% · artist ${Math.round(c.artist_similarity * 100)}%`
+      + ` · dur ${Math.round(c.duration_score * 100)}% · uploader ${c.uploader_score}`
+      + (c.keyword_score ? ` · keyword ${c.keyword_score}` : "");
+    const label = `${(t.canonical_artist || "")} — ${(t.canonical_title || "")}`;
+    return `<div class="vrow ${c.veto_reason ? "isveto" : ""}">
+      <div class="vmain">
+        <div class="vtitle">${esc(c.candidate_title || "?")} ${badge}${applied ? ' <span class="vbad hi">✓ in use</span>' : ""}${c.status === "superseded" ? ' <span class="vbad lo">superseded</span>' : ""}</div>
+        <div class="vsub">${esc(c.candidate_channel || "")} · ${cd} vs ${canon}${c.result_type ? " · " + esc(c.result_type) : ""}</div>
+        <div class="vev">${ev}</div>
+      </div>
+      <div class="vact">
+        <button title="preview in player" onclick="previewVersion('${esc(c.video_id)}','${esc(label)}','${esc(t.track_pk)}')">▶</button>
+        ${c.status === "pending" ? `<button title="use this version" onclick="approveVersion(${c.candidate_id})">Use</button>` : ""}
+        ${c.status === "pending" ? `<button class="danger" title="reject — never suggest again" onclick="rejectVersion(${c.candidate_id})">✕</button>` : ""}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function previewVersion(videoId, label, pk) {
+  play(videoId, label, pk, true);  // reuse the IFrame player; ext=true → "· extended"
+}
+
+async function approveVersion(candidateId) {
+  try {
+    await api(`/api/version-candidates/${candidateId}/approve`, { method: "POST", body: "{}" });
+  } catch (e) { toast(e.message || "Couldn't apply"); return; }
+  toast("Playback version set ✓");
+  // Reflect locally: this one approved, the rest for the track superseded.
+  const c = state.verCache.cands.find(x => x.candidate_id === candidateId);
+  if (c) {
+    c.status = "approved";
+    state.verCache.cands.forEach(x => { if (x.candidate_id !== candidateId && x.status === "pending") x.status = "superseded"; });
+  }
+  const el = document.querySelector("#ver-results");
+  if (el) renderVersionCandidates(el);
+  reloadCurrent();
+}
+
+async function rejectVersion(candidateId) {
+  try {
+    await api(`/api/version-candidates/${candidateId}/reject`, { method: "POST", body: "{}" });
+  } catch (e) { toast(e.message || "Couldn't reject"); return; }
+  toast("Rejected — won't suggest again");
+  const c = state.verCache.cands.find(x => x.candidate_id === candidateId);
+  if (c) c.status = "rejected";
+  const el = document.querySelector("#ver-results");
+  if (el) renderVersionCandidates(el);
+  reloadCurrent();
 }
 
 async function vetoReference(pk, profileId) {
@@ -519,21 +741,124 @@ async function rejectTag(pk, tag) {
 // Phone:   deep-link opens the YouTube Music app (audio engine).
 // Desktop: official YouTube embed in the player bar.
 
-function play(videoId, label) {
-  if (!videoId) return;
-  if (state.isMobile) {
-    window.location.href = `https://music.youtube.com/watch?v=${videoId}`;
-  } else {
-    $("np").innerHTML = `<b>${esc(label)}</b>`;
-    $("np-ytm").href = `https://music.youtube.com/watch?v=${videoId}`;
-    $("ytplayer").src = `https://www.youtube.com/embed/${videoId}?autoplay=1`;
-    $("playerbar").classList.add("visible");
+// Desktop: a real queue player via the YouTube IFrame API (continuous play,
+// auto-advance, transport controls, seek). Mobile: deep-link out (a web player
+// can't background-play on Android — that wall is tracked separately).
+let ytPlayer = null, ytReady = false, pendingPlay = null, progTimer = null;
+
+function onYouTubeIframeAPIReady() {
+  ytPlayer = new YT.Player("ytplayer", {
+    height: "68", width: "120",
+    playerVars: { playsinline: 1, rel: 0 },
+    events: {
+      onReady: () => {
+        ytReady = true;
+        if (pendingPlay) { const p = pendingPlay; pendingPlay = null; loadQ(p.index); }
+      },
+      onStateChange: onPlayerState,
+    },
+  });
+}
+
+function onPlayerState(e) {
+  if (e.data === YT.PlayerState.ENDED) { nextTrack(); return; }
+  const btn = $("pb-play");
+  if (e.data === YT.PlayerState.PLAYING) { btn.textContent = "⏸"; startProg(); }
+  else if (e.data === YT.PlayerState.PAUSED) { btn.textContent = "▶"; }
+}
+
+// Tracks visible in the current view, in display order — that's the queue.
+function currentViewTracks() {
+  if (state.view === "inbox") return state.inbox || [];
+  return state.tracks || [];
+}
+// Prefer an explicitly-set playback id (e.g. an extended version), else the song.
+function playableId(t) { return t.playback_video_id || t.ytm_track_id || null; }
+
+// Track-row play button: start a continuous queue from this track through the
+// rest of the visible list.
+function playFromList(pk) {
+  const list = currentViewTracks();
+  const playable = list.filter(playableId);
+  const idx = playable.findIndex(t => t.track_pk === pk);
+  if (idx < 0) {
+    const t = list.find(x => x.track_pk === pk);
+    if (t) play(playableId(t), `${t.canonical_artist} — ${t.canonical_title}`, pk, !!t.playback_video_id);
+    return;
   }
+  const queue = playable.map(t => ({
+    videoId: playableId(t),
+    label: `${t.canonical_artist} — ${t.canonical_title}`,
+    pk: t.track_pk,
+    ext: !!t.playback_video_id,
+  }));
+  _startQueue(queue, idx);
+}
+
+// Low-level single-item play (used by Home/now-playing/recent callers).
+function play(videoId, label, pk, ext) {
+  if (!videoId) return;
+  _startQueue([{ videoId, label, pk: pk || null, ext: !!ext }], 0);
+}
+
+function _startQueue(queue, index) {
+  if (state.isMobile) {
+    window.location.href = `https://music.youtube.com/watch?v=${queue[index].videoId}`;
+    return;
+  }
+  state.queue = queue; state.qIndex = index;
+  $("playerbar").classList.add("visible");
+  if (!ytReady) { pendingPlay = { index }; return; }
+  loadQ(index);
+}
+
+function loadQ(i) {
+  if (i < 0 || i >= state.queue.length) return;
+  state.qIndex = i;
+  const item = state.queue[i];
+  ytPlayer.loadVideoById(item.videoId);
+  $("np").innerHTML = `<b>${esc(item.label)}</b>` +
+    (item.ext ? ' <span style="color:var(--accent);font-size:11px">· extended</span>' : "");
+  $("np-ytm").href = `https://music.youtube.com/watch?v=${item.videoId}`;
+  highlightPlaying(item.pk);
+}
+
+function nextTrack() {
+  if (state.qIndex < (state.queue || []).length - 1) loadQ(state.qIndex + 1);
+}
+function prevTrack() {
+  if (ytReady && ytPlayer.getCurrentTime && ytPlayer.getCurrentTime() > 3) { ytPlayer.seekTo(0, true); return; }
+  if (state.qIndex > 0) loadQ(state.qIndex - 1);
+}
+function togglePlay() {
+  if (!ytReady) return;
+  const s = ytPlayer.getPlayerState();
+  if (s === YT.PlayerState.PLAYING) ytPlayer.pauseVideo(); else ytPlayer.playVideo();
+}
+
+function startProg() {
+  if (progTimer) return;
+  progTimer = setInterval(() => {
+    if (!ytReady || !ytPlayer.getDuration) return;
+    const d = ytPlayer.getDuration() || 0, c = ytPlayer.getCurrentTime() || 0;
+    $("pb-fill").style.width = d ? `${(c / d) * 100}%` : "0";
+    $("pb-cur").textContent = fmtTime(c);
+    $("pb-dur").textContent = fmtTime(d);
+  }, 500);
+}
+function fmtTime(s) { s = Math.floor(s || 0); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
+
+function highlightPlaying(pk) {
+  document.querySelectorAll(".track.playing").forEach(el => el.classList.remove("playing"));
+  if (pk) { const el = document.getElementById("tr-" + pk); if (el) el.classList.add("playing"); }
 }
 
 function closePlayer() {
-  $("ytplayer").src = "";
+  if (ytReady && ytPlayer.stopVideo) ytPlayer.stopVideo();
+  if (progTimer) { clearInterval(progTimer); progTimer = null; }
+  state.queue = []; state.qIndex = -1;
   $("playerbar").classList.remove("visible");
+  highlightPlaying(null);
 }
 
 // ── Source-playlist editing: cull tracks from your own YTM playlists ──
@@ -1004,15 +1329,28 @@ $("tab-library").onclick = () => switchView("library");
 $("tab-inbox").onclick = () => switchView("inbox");
 $("tab-playlists").onclick = () => switchView("playlists");
 $("tab-review").onclick = () => switchView("review");
+$("tab-verdict").onclick = () => switchView("verdict");
 $("tab-tags").onclick = () => switchView("tags");
 $("tab-training").onclick = () => switchView("training");
 
+// Seek by clicking the player progress bar.
+$("pb-track").onclick = (e) => {
+  if (!ytReady || !ytPlayer.getDuration) return;
+  const r = e.currentTarget.getBoundingClientRect();
+  ytPlayer.seekTo(((e.clientX - r.left) / r.width) * (ytPlayer.getDuration() || 0), true);
+};
+
 // AND/OR toggle + source-playlist filter (bound once)
 $("tagmode").onclick = () => { state.tagMode = state.tagMode === "and" ? "or" : "and"; loadTagChips(); loadTracks(); };
+$("pendingverbtn").onclick = () => {
+  state.pendingVersions = !state.pendingVersions;
+  $("pendingverbtn").classList.toggle("on", state.pendingVersions);
+  loadTracks();
+};
 $("srcplaylist").onchange = (e) => { state.sourcePlaylist = e.target.value; loadTracks(); };
 $("plsort").onchange = (e) => { state.playlistSort = e.target.value; loadSourcePlaylists(); };
 
-const VIEWS = ["home", "library", "inbox", "playlists", "review", "tags", "training"];
+const VIEWS = ["home", "library", "inbox", "playlists", "review", "verdict", "tags", "training"];
 function switchView(v) {
   state.view = v;
   VIEWS.forEach(name => {
@@ -1027,6 +1365,7 @@ function switchView(v) {
   if (v === "inbox") loadInbox();
   if (v === "playlists") loadPlaylists();
   if (v === "review") loadReview();
+  if (v === "verdict") loadVerdict();
   if (v === "tags") loadTags();
   if (v === "training") loadTraining();
 }
@@ -1072,9 +1411,232 @@ async function loadTraining() {
   el.innerHTML = `<div class="trainhead">${intro}</div>${cards}`;
 }
 
+// ── Verdict Queue: the system names, you judge. <15s per track. ──
+// Reuses the bottom player bar as the "embedded IFrame". Suggestions come from
+// public tags (subgenre/family); the two micro-questions are the locked
+// functional + personal vocab. Commit-and-next fills the Training readiness bars.
+async function loadVerdict() {
+  const el = $("verdict");
+  if (!state.vqProfiles) {
+    try {
+      const d = await api("/api/reference/profiles");
+      state.vqProfiles = d.profiles || []; state.vqTiebreakers = d.tiebreakers || [];
+    } catch (e) { state.vqProfiles = []; state.vqTiebreakers = []; }
+  }
+  el.innerHTML = '<div class="vq-strip">Loading queue…</div>';
+  try {
+    const [q, r] = await Promise.all([
+      api("/api/verdict/queue?limit=20"),
+      api("/api/reference/readiness"),
+    ]);
+    state.vq = q.tracks || []; state.vqMeta = q.meta || {}; state.vqIndex = 0;
+    state.vqReadiness = r.profiles || [];
+  } catch (e) { el.innerHTML = '<div class="empty">Couldn\'t load the queue.</div>'; return; }
+  renderVerdict();
+}
+
+function vqStrip() {
+  const p = state.vqReadiness || [];
+  const ready = p.filter(x => x.ready).length;
+  const adv = state.vqLastAdv
+    ? `<span class="vq-adv">↑ advanced ${esc(state.vqLastAdv)}</span>` : "<span></span>";
+  const left = state.vqMeta ? (state.vqMeta.eligible_total || 0) : 0;
+  return `<div class="vq-strip"><span><b>${ready}</b> of ${p.length} profiles ready</span>`
+    + `${adv}<span><b>${left}</b> to judge</span></div>`;
+}
+
+function vqProfilesByLayer(layer) {
+  return (state.vqProfiles || []).filter(p => p.taxonomy_layer === layer);
+}
+
+function renderVerdict() {
+  const el = $("verdict");
+  if (state.vqIndex >= state.vq.length) {
+    if (state.vq.length && state.vqMeta && state.vqMeta.eligible_total > state.vq.length) {
+      loadVerdict(); return;   // fetch a fresh batch (judged tracks won't return)
+    }
+    el.innerHTML = vqStrip()
+      + '<div class="empty">Nothing left to judge here. 🎉<br>'
+      + '<span class="vq-note"><a onclick="vqUnskipAll()">Re-serve skipped tracks</a></span></div>';
+    return;
+  }
+  const t = state.vq[state.vqIndex];
+  if (!t._sel) t._sel = { func: null, personal: new Set(), accepted: new Set(), rejected: new Set() };
+  state.vqRevealed = false;
+
+  const existing = (t.tags || []).map(g =>
+    `<span class="tag ${g.tag_type === "private_manual" ? "manual" : ""}">${esc(g.tag)}</span>`).join("");
+  const chips = (t.playlists || []).map(p =>
+    `<span class="tag">${esc(p.playlist_name)}</span>`).join("");
+
+  // Suggestions (subgenre/family, from public tags).
+  const sugg = (t.suggestions || []);
+  const suggHtml = sugg.length ? sugg.map((s, i) => {
+    const acc = t._sel.accepted.has(s.profile_id);
+    const rej = t._sel.rejected.has(s.profile_id);
+    const ev = (s.evidence || []).map(e => `<span>${esc(e)}</span>`).join("");
+    return `<div class="vq-scard ${acc ? "accepted" : ""} ${rej ? "rejected" : ""}">
+      <div class="vq-srow">
+        <span class="vq-skey">${i + 1}</span>
+        <span class="vq-sname">${esc(s.tag_name)}</span>
+        <span class="vq-slayer">${esc(s.taxonomy_layer)}</span>
+        <button class="vq-sbtn yes ${acc ? "on" : ""}" onclick="vqAccept(${i})">✓ yes</button>
+        <button class="vq-sbtn no ${rej ? "on" : ""}" onclick="vqReject(${i})">✕ no</button>
+      </div>
+      ${ev ? `<div class="vq-ev">${ev}</div>` : ""}
+    </div>`;
+  }).join("") : '<div class="hint" style="padding:4px 2px">No suggestions yet — answer the questions below.</div>';
+
+  const blur = (state.vqGuessFirst && sugg.length) ? "blurred" : "";
+  const revealBtn = (state.vqGuessFirst && sugg.length)
+    ? '<div class="vq-reveal" onclick="vqReveal()">👂 Guess first — tap or press <b>g</b> to reveal suggestions</div>' : "";
+
+  // Micro-question 1: functional (single-select) + "?" tie-breaker expander.
+  const funcChips = vqProfilesByLayer("functional").map(p =>
+    `<span class="vq-chip ${t._sel.func === p.tag_name ? "on" : ""}" title="${esc(p.description || "")}" onclick="vqPickFunc('${esc(p.tag_name)}')">${esc(p.tag_name)}</span>`).join("");
+  const persChips = vqProfilesByLayer("personal").map(p =>
+    `<span class="vq-chip ${t._sel.personal.has(p.tag_name) ? "on" : ""}" title="${esc(p.description || "")}" onclick="vqTogglePersonal('${esc(p.tag_name)}')">${esc(p.tag_name)}</span>`).join("");
+
+  el.innerHTML = vqStrip() + `<div class="vq-card">
+    <div class="vq-head">
+      <div>
+        <div class="vq-title">${esc(t.title || "Untitled")}</div>
+        <div class="vq-artist">${esc(t.artist || "")}</div>
+        ${t.album ? `<div class="vq-album">${esc(t.album)}</div>` : ""}
+      </div>
+      <button class="vq-play" onclick="vqPlay()" title="Play (space)">▶</button>
+    </div>
+    ${existing || chips ? `<div class="vq-existing">${existing}${chips}</div>` : ""}
+
+    <div class="vq-seclbl">Suggestions <span class="vq-skiphint">1/2/3 = yes · ⇧1/2/3 = no</span></div>
+    ${revealBtn}
+    <div class="vq-sugg ${blur}">${suggHtml}</div>
+
+    <div class="vq-seclbl">Where in a set? <span class="vq-help" onclick="vqShowTiebreakers()" title="tie-breaker rules">?</span></div>
+    <div class="vq-chips">${funcChips}</div>
+
+    <div class="vq-seclbl">Life context?</div>
+    <div class="vq-chips">${persChips}</div>
+
+    <div class="vq-foot">
+      <button class="commit" onclick="vqCommit()">Commit &amp; next ⏎</button>
+      <button class="skip" onclick="vqSkip()">Skip (s)</button>
+    </div>
+    <div class="vq-note">
+      <label class="vq-toggle"><input type="checkbox" ${state.vqGuessFirst ? "checked" : ""} onchange="vqToggleGuess(this.checked)"> Guess-first (hide suggestions until revealed)</label>
+    </div>
+  </div>`;
+
+  if (!state.isMobile) vqPlay();   // auto-play so you can judge by ear immediately
+}
+
+function vqCard() { return state.vq[state.vqIndex]; }
+
+function vqPlay() {
+  const t = vqCard(); if (!t || !t.video_id) return;
+  play(t.video_id, `${t.artist} — ${t.title}`, t.pk, !!t.playback_video_id);
+}
+
+async function vqAccept(i) {
+  const t = vqCard(); const s = (t.suggestions || [])[i]; if (!s) return;
+  try {
+    await api(`/api/tracks/${t.pk}/tags`, { method: "POST", body: JSON.stringify({ tag: s.tag_name }) });
+    t._sel.accepted.add(s.profile_id); t._sel.rejected.delete(s.profile_id);
+    toast(`✓ ${s.tag_name}`); renderVerdict();
+  } catch (e) { toast("Failed — try again"); }
+}
+
+async function vqReject(i) {
+  const t = vqCard(); const s = (t.suggestions || [])[i]; if (!s) return;
+  try {
+    await api(`/api/tracks/${t.pk}/verdict/reject/${encodeURIComponent(s.profile_id)}`, { method: "POST", body: "{}" });
+    t._sel.rejected.add(s.profile_id); t._sel.accepted.delete(s.profile_id);
+    toast(`✕ not ${s.tag_name}`); renderVerdict();
+  } catch (e) { toast("Failed — try again"); }
+}
+
+function vqPickFunc(tag) {
+  const t = vqCard(); t._sel.func = (t._sel.func === tag) ? null : tag; renderVerdict();
+}
+function vqTogglePersonal(tag) {
+  const t = vqCard();
+  if (t._sel.personal.has(tag)) t._sel.personal.delete(tag); else t._sel.personal.add(tag);
+  renderVerdict();
+}
+
+async function vqCommit() {
+  const t = vqCard(); if (!t) return;
+  const tags = [];
+  if (t._sel.func) tags.push(t._sel.func);
+  t._sel.personal.forEach(x => tags.push(x));
+  try {
+    for (const tag of tags) {
+      await api(`/api/tracks/${t.pk}/tags`, { method: "POST", body: JSON.stringify({ tag }) });
+    }
+  } catch (e) { toast("Some tags failed — moving on"); }
+  const advanced = [...t._sel.accepted].map(pid => {
+    const s = (t.suggestions || []).find(x => x.profile_id === pid); return s ? s.tag_name : pid;
+  }).concat(tags);
+  state.vqLastAdv = advanced.length ? advanced.join(", ") : "";
+  state.vqIndex++;
+  try { const r = await api("/api/reference/readiness"); state.vqReadiness = r.profiles || []; } catch (e) {}
+  if (state.vqMeta) state.vqMeta.eligible_total = Math.max(0, (state.vqMeta.eligible_total || 1) - 1);
+  renderVerdict();
+}
+
+async function vqSkip() {
+  const t = vqCard(); if (!t) return;
+  try { await api(`/api/tracks/${t.pk}/verdict/skip`, { method: "POST", body: "{}" }); } catch (e) {}
+  state.vqLastAdv = "";
+  state.vqIndex++;
+  if (state.vqMeta) state.vqMeta.eligible_total = Math.max(0, (state.vqMeta.eligible_total || 1) - 1);
+  renderVerdict();
+}
+
+async function vqUnskipAll() {
+  try { const r = await api("/api/verdict/unskip-all", { method: "POST", body: "{}" }); toast(`Re-served ${r.restored}`); }
+  catch (e) {}
+  loadVerdict();
+}
+
+function vqReveal() { state.vqGuessFirst = false; renderVerdict(); state.vqGuessFirst = localStorage.getItem("vqGuessFirst") === "1"; }
+function vqToggleGuess(on) {
+  state.vqGuessFirst = on; localStorage.setItem("vqGuessFirst", on ? "1" : "0"); renderVerdict();
+}
+
+function vqShowTiebreakers() {
+  const rules = (state.vqTiebreakers || []).map(t =>
+    `<p style="margin:8px 0"><b>${esc(t.pair)}</b><br><span class="hint" style="font-size:12.5px">${esc(t.rule)}</span></p>`).join("");
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.onclick = (ev) => { if (ev.target === bg) bg.remove(); };
+  bg.innerHTML = `<div class="modal"><h2>Tie-breaker rules</h2>${rules || '<p class="hint">—</p>'}
+    <div class="btnrow"><button class="primary" onclick="this.closest('.modal-bg').remove()">Got it</button></div></div>`;
+  document.body.appendChild(bg);
+}
+
+// Keyboard: only when the Verdict tab is active and nothing is being typed into.
+document.addEventListener("keydown", (e) => {
+  if (state.view !== "verdict") return;
+  const tag = (e.target.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || document.querySelector(".modal-bg")) return;
+  const t = vqCard(); if (!t) return;
+  if (e.code === "Space") { e.preventDefault(); togglePlay(); return; }
+  if (e.code === "Enter") { e.preventDefault(); vqCommit(); return; }
+  if (e.key === "s" || e.key === "S") { e.preventDefault(); vqSkip(); return; }
+  if (e.key === "g" || e.key === "G") { if (state.vqGuessFirst) vqReveal(); return; }
+  const digit = { Digit1: 0, Digit2: 1, Digit3: 2 }[e.code];
+  if (digit !== undefined) {
+    e.preventDefault();
+    if (e.shiftKey) vqReject(digit); else vqAccept(digit);
+  }
+});
+
 document.querySelector('#ratingchips .chip[data-rating=""]').classList.add("active");
 loadStats(); loadTracks(); loadTagChips(); loadHome(); startHomePolling();
 loadInbox(); loadReview();   // populate tab badges on boot
 </script>
+<!-- YouTube IFrame Player API — calls the global onYouTubeIframeAPIReady() above. -->
+<script src="https://www.youtube.com/iframe_api"></script>
 </body>
 </html>

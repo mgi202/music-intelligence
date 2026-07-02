@@ -1,13 +1,14 @@
 """
 Background worker — the system's heartbeat on the home server.
 
-One pass runs six isolated stages (a failure in one never blocks the rest):
-  1. Ingest from YTM + takedown marking (2-scan rule)
-  2. Enrich (TTL-aware metadata pipeline)
-  3. Playlist sync (guarded: snapshots, shrink guard, hash short-circuit)
-  4. Listens import (ListenBrainz + YTM history) — env-gated
-  5. Metrics snapshot (one row per pass)
-  6. Prune (processing_events > 90d, playlist_snapshots > 60d)
+One pass runs seven isolated stages (a failure in one never blocks the rest):
+  1.  Ingest from YTM + takedown marking (2-scan rule)
+  2.  Enrich (TTL-aware metadata pipeline)
+  2b. Extended-version discovery (rated set — YTM search + auto-apply/queue)
+  3.  Playlist sync (guarded: snapshots, shrink guard, hash short-circuit)
+  4.  Listens import (ListenBrainz + YTM history) — env-gated
+  5.  Metrics snapshot (one row per pass)
+  6.  Prune (processing_events > 90d, playlist_snapshots > 60d)
 
 Any stage failure fires a one-line ntfy.sh push when NTFY_TOPIC is set.
 
@@ -102,6 +103,22 @@ def run_pass() -> None:
         logger.info("Enrichment: %s", stats)
     except Exception as e:
         _alert("Enrichment", e)
+
+    # ── 2b. Extended-version discovery (rated set) ──
+    # Walks tracks with a personal_rating but no playback_video_id yet, searches
+    # YTM for the extended/club cut, auto-applies the near-certain ones and
+    # queues the rest for review. Rated-only + on-demand — never the whole
+    # library. Isolated: a search failure never blocks the rest of the pass.
+    try:
+        from app.enrichment.version_discovery import run_batch
+
+        vd = run_batch(limit=int(os.getenv("VERSION_DISCOVERY_BATCH_SIZE", "25")))
+        logger.info(
+            "Version discovery: %d scanned, %d auto-applied, %d pending, %d discarded",
+            vd["scanned"], vd["auto_applied"], vd["pending"], vd["discarded"],
+        )
+    except Exception as e:
+        _alert("Version discovery", e)
 
     # ── 3. Playlist sync ──
     try:
