@@ -471,15 +471,20 @@ def reference_profiles():
 
 
 # ─────────────────────────────────────────
-# Verdict Queue — rapid, suggestion-first tagging (TAG-VOCAB-DESIGN.md)
+# Verdict Queue — rapid, suggestion-first tagging (TAG-VOCAB-DESIGN.md).
+# Powers the merged Review surface: one queue, two sort lenses.
 # ─────────────────────────────────────────
 
 @app.get("/api/verdict/queue")
-def verdict_queue(limit: int = Query(20, ge=1, le=100)):
-    """Tracks ordered by training value, each with ranked suggestions + evidence
-    and the data the card needs (IFrame id, effective tags, playlist chips)."""
+def verdict_queue(
+    limit: int = Query(20, ge=1, le=100),
+    sort: str = Query("training", pattern="^(training|newest)$",
+                      description="training = by training value; newest = inbox behaviour (unrated, created_at DESC)"),
+):
+    """Review queue with ranked suggestions + evidence and the data the card
+    needs (IFrame id, rating, effective tags, playlist chips)."""
     from app.tags import verdict_queue as vq
-    return vq.build_queue(limit=limit)
+    return vq.build_queue(limit=limit, sort=sort)
 
 
 @app.post("/api/tracks/{track_pk}/verdict/reject/{profile_id}")

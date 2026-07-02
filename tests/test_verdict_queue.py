@@ -166,6 +166,65 @@ def test_queue_artist_diversity_cap(db):
         assert run <= 2, f"artist run exceeded cap: {artists}"
 
 
+# ── Merged Review surface: two sort lenses (2026-07-02) ───────────────────────
+
+def test_newest_lens_orders_by_created_at_desc(db):
+    from app.tags.verdict_queue import build_queue
+    with db_conn(db) as c:
+        insert_track(c, "old", canonical_artist="A", ytm_track_id="v1",
+                     created_at="2026-01-01T00:00:00Z")
+        insert_track(c, "mid", canonical_artist="B", ytm_track_id="v2",
+                     created_at="2026-04-01T00:00:00Z")
+        insert_track(c, "new", canonical_artist="C", ytm_track_id="v3",
+                     created_at="2026-07-01T00:00:00Z")
+        # Give the OLD track a starved-profile suggestion — training value must
+        # NOT reorder the newest lens.
+        _pub(c, "old", "hypnotic", "lastfm", 0.3)
+
+    q = build_queue(db_path=db, sort="newest")
+    assert [t["pk"] for t in q["tracks"]] == ["new", "mid", "old"]
+    assert q["meta"]["sort"] == "newest"
+    assert q["meta"]["eligible_total"] == 3
+    # Training lens still puts the suggestion-bearing track first.
+    assert build_queue(db_path=db, sort="training")["tracks"][0]["pk"] == "old"
+
+
+def test_lens_eligibility_matrix(db):
+    """rated → out of newest, still in training; dismissed → out of BOTH;
+    func-tagged / skipped / blocked → out of both (existing exclusions)."""
+    from app.tags.verdict_queue import build_queue
+    with db_conn(db) as c:
+        insert_track(c, "plain", canonical_artist="A", ytm_track_id="v1")
+        insert_track(c, "rated", canonical_artist="B", ytm_track_id="v2", personal_rating=3)
+        insert_track(c, "dismissed", canonical_artist="C", ytm_track_id="v3",
+                     inbox_dismissed_at="2026-07-01T00:00:00Z")
+        insert_track(c, "tagged", canonical_artist="D", ytm_track_id="v4")
+        _manual(c, "tagged", "warm-up")
+        insert_track(c, "skipped", canonical_artist="E", ytm_track_id="v5",
+                     verdict_skipped_at="2026-07-01T00:00:00Z")
+
+    newest = {t["pk"] for t in build_queue(db_path=db, sort="newest")["tracks"]}
+    training = {t["pk"] for t in build_queue(db_path=db, sort="training")["tracks"]}
+    assert newest == {"plain"}
+    assert training == {"plain", "rated"}   # rating is preference, not training signal
+
+
+def test_queue_payload_carries_rating_and_flags(db):
+    from app.tags.verdict_queue import build_queue
+    with db_conn(db) as c:
+        insert_track(c, "t1", canonical_artist="A", ytm_track_id="v1", personal_rating=2)
+    t = build_queue(db_path=db, sort="training")["tracks"][0]
+    assert t["personal_rating"] == 2
+    assert t["blocked_from_playlists"] == 0
+    assert t["do_not_recommend"] == 0
+
+
+def test_build_queue_rejects_unknown_sort(db):
+    from app.tags.verdict_queue import build_queue
+    with pytest.raises(ValueError, match="sort"):
+        build_queue(db_path=db, sort="oldest")
+
+
 # ── Suggestions ────────────────────────────────────────────────────────────────
 
 def test_suggestion_ranking_and_evidence(db):
@@ -283,6 +342,33 @@ def test_api_verdict_queue_reject_skip(client, db):
 
     # Unknown track → 404.
     assert client.post("/api/tracks/nope/verdict/skip").status_code == 404
+
+
+def test_api_queue_sort_param(client, db):
+    with db_conn(db) as c:
+        insert_track(c, "t1", canonical_artist="A", ytm_track_id="v1")
+        insert_track(c, "rated", canonical_artist="B", ytm_track_id="v2", personal_rating=4)
+
+    # Default is training.
+    q = client.get("/api/verdict/queue").json()
+    assert q["meta"]["sort"] == "training"
+    assert {t["pk"] for t in q["tracks"]} == {"t1", "rated"}
+
+    q = client.get("/api/verdict/queue?sort=newest").json()
+    assert q["meta"]["sort"] == "newest"
+    assert [t["pk"] for t in q["tracks"]] == ["t1"]
+
+    # Invalid sort → validation error, not a 500.
+    assert client.get("/api/verdict/queue?sort=oldest").status_code == 422
+
+
+def test_api_dismiss_leaves_both_lenses(client, db):
+    with db_conn(db) as c:
+        insert_track(c, "t1", canonical_artist="A", ytm_track_id="v1")
+
+    assert client.post("/api/tracks/t1/dismiss").json()["dismissed"] is True
+    assert client.get("/api/verdict/queue?sort=newest").json()["tracks"] == []
+    assert client.get("/api/verdict/queue?sort=training").json()["tracks"] == []
 
 
 def test_api_reference_profiles_has_tiebreakers(client, db):

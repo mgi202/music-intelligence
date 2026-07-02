@@ -186,7 +186,6 @@
   .plrow .plx { background: none; border: none; color: #6fb6d6; padding: 2px 7px; cursor: pointer; font-size: 12px; line-height: 1; opacity: .65; }
   .plrow .plx:hover { opacity: 1; color: var(--danger); background: #2a1414; }
   #toast .undobtn { margin-left: 12px; background: #111; color: var(--accent); border: none; border-radius: 6px; padding: 3px 11px; font-weight: 700; cursor: pointer; pointer-events: auto; }
-  .filterbar.inboxfilter { padding: 2px 0 10px; }
 
   /* Review sub-tabs */
   nav.subtabs { display: flex; gap: 4px; margin-bottom: 10px; border-bottom: 1px solid #23232e; }
@@ -253,6 +252,17 @@
   .vq-toggle { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--dim); cursor: pointer; }
   .vq-note { font-size: 11px; color: var(--dim); margin-top: 10px; text-align: center; }
   .vq-note a { color: var(--accent); cursor: pointer; }
+  /* Merged Review surface: lens toggle + triage row + rating row */
+  .vq-lens { display: flex; gap: 4px; }
+  .vq-lens button { background: var(--panel2); border: 1px solid #2b2b38; color: var(--dim); padding: 3px 11px; border-radius: 999px; font-size: 11.5px; cursor: pointer; }
+  .vq-lens button.on { background: var(--accent); color: #111; border-color: var(--accent); font-weight: 700; }
+  .vq-triage { display: flex; gap: 8px; margin-top: 12px; }
+  .vq-triage button { flex: 1; padding: 9px; border-radius: 9px; border: 1px solid #2b2b38; background: var(--panel2); color: var(--text); font-size: 13px; cursor: pointer; }
+  .vq-triage button.notforme { color: var(--danger); border-color: #4a2530; }
+  .vq-triage button.more { flex: 0 0 44px; color: var(--dim); font-size: 16px; }
+  .vq-stars { display: flex; gap: 4px; }
+  .vq-stars button { background: none; border: none; font-size: 26px; color: #3a3a48; cursor: pointer; padding: 2px 4px; line-height: 1; }
+  .vq-stars button.lit { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -286,10 +296,9 @@
   <nav class="tabs">
     <button id="tab-home" class="active">Home</button>
     <button id="tab-library">Library</button>
-    <button id="tab-inbox">Inbox <span id="inboxbadge" class="badge" style="display:none"></span></button>
-    <button id="tab-playlists">Playlists</button>
     <button id="tab-review">Review <span id="reviewbadge" class="badge" style="display:none"></span></button>
-    <button id="tab-verdict">Verdict</button>
+    <button id="tab-playlists">Playlists</button>
+    <button id="tab-matches">Matches <span id="matchesbadge" class="badge" style="display:none"></span></button>
     <button id="tab-tags">Tags</button>
     <button id="tab-training">Training</button>
   </nav>
@@ -303,10 +312,9 @@
   </div>
   <div class="stats" id="stats" style="display:none"></div>
   <div id="library" style="display:none"></div>
-  <div id="inbox" style="display:none"></div>
   <div id="playlists" style="display:none"></div>
   <div id="review" style="display:none"></div>
-  <div id="verdict" style="display:none"></div>
+  <div id="matches" style="display:none"></div>
   <div id="tags" style="display:none"></div>
   <div id="training" style="display:none"></div>
 </main>
@@ -338,15 +346,16 @@
 
 <script>
 const state = {
-  q: "", rating: "", tags: [], tagMode: "and", sourcePlaylist: "", inboxPlaylist: "", playlistSort: "name_asc", pendingVersions: false,
+  q: "", rating: "", tags: [], tagMode: "and", sourcePlaylist: "", playlistSort: "name_asc", pendingVersions: false,
   offset: 0, limit: 100, total: 0,
   tracks: [], allTags: [], vocab: [], sourcePlaylists: [],
-  reviewSub: "duplicates", reviewPairs: [], view: "library",
+  matchesSub: "duplicates", reviewPairs: [], view: "library",
   isMobile: /Android|iPhone|iPad/i.test(navigator.userAgent),
   queue: [], qIndex: -1,
-  // Verdict Queue
+  // Review queue (merged Inbox + Verdict surface)
   vq: [], vqIndex: 0, vqSel: null, vqReadiness: null, vqLastAdv: "",
   vqGuessFirst: localStorage.getItem("vqGuessFirst") === "1", vqRevealed: false,
+  reviewSort: localStorage.getItem("reviewSort") === "newest" ? "newest" : "training",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -425,7 +434,6 @@ function trackCard(t, opts = {}) {
       <div class="tagrow">
         ${tags}
         <button class="addtag" onclick="addTag('${t.track_pk}')">+ tag</button>
-        ${opts.dismiss ? `<button class="addtag" onclick="dismissTrack('${t.track_pk}')">✓ dismiss</button>` : ""}
       </div>
       ${plchips ? `<div class="plrow">${plchips}</div>` : ""}
     </div>`;
@@ -440,9 +448,25 @@ function renderLibrary() {
         ? `<button class="loadmore" onclick="more()">Load more (${state.total - state.tracks.length} remaining)</button>` : "");
 }
 
+// Locate a track by pk across the pools that render cards. Review-queue tracks
+// use short field names, so map them to the canonical track shape.
+function findTrack(pk) {
+  const t = (state.tracks || []).find(x => x.track_pk === pk);
+  if (t) return t;
+  const v = (state.vq || []).find(x => x.pk === pk);
+  if (v) return {
+    track_pk: v.pk, canonical_title: v.title, canonical_artist: v.artist,
+    album_title: v.album, ytm_track_id: v.video_id, playback_video_id: v.playback_video_id,
+    personal_rating: v.personal_rating, blocked_from_playlists: v.blocked_from_playlists,
+    do_not_recommend: v.do_not_recommend, tags: v.tags || [],
+    playlists: v.playlists || [], reference_profiles: [],
+  };
+  return {};
+}
+
 // ── ⋯ menu: block / don't-recommend / reference exemplars / wrong-match ──
 async function trackMenu(pk) {
-  const t = (state.tracks.concat(state.inbox || [])).find(x => x.track_pk === pk) || {};
+  const t = findTrack(pk);
   const bg = document.createElement("div");
   bg.className = "menu";
   bg.onclick = (ev) => { if (ev.target === bg) bg.remove(); };
@@ -481,7 +505,6 @@ async function trackMenu(pk) {
 // Reload whichever list is on screen (shared by the version flow).
 function reloadCurrent() {
   if (state.view === "library") loadTracks();
-  else if (state.view === "inbox") loadInbox();
   else if (state.view === "home") loadHome();
 }
 function fmtDurMs(ms) {
@@ -492,7 +515,7 @@ function fmtDurMs(ms) {
 // Two-part dialog: auto-search YTM for extended/club versions (scored, one-click
 // apply/reject with the evidence shown), plus the manual paste-a-link fallback.
 async function versionDialog(pk) {
-  const t = (state.tracks.concat(state.inbox || [])).find(x => x.track_pk === pk) || {};
+  const t = findTrack(pk);
   const bg = document.createElement("div");
   bg.className = "menu";
   bg.onclick = (ev) => { if (ev.target === bg) bg.remove(); };
@@ -598,51 +621,54 @@ async function rejectVersion(candidateId) {
 async function vetoReference(pk, profileId) {
   await api(`/api/tracks/${pk}/reference/${encodeURIComponent(profileId)}/veto`, { method: "POST", body: "{}" });
   toast("Won't use as an example");
-  if (state.view === "library") loadTracks(); else if (state.view === "inbox") loadInbox();
+  if (state.view === "library") loadTracks();
 }
 
 async function unvetoReference(pk, profileId) {
   await api(`/api/tracks/${pk}/reference/${encodeURIComponent(profileId)}/veto`, { method: "DELETE" });
   toast("Restored as an example");
-  if (state.view === "library") loadTracks(); else if (state.view === "inbox") loadInbox();
+  if (state.view === "library") loadTracks();
+}
+
+// Retire the current review card when an action just made it ineligible for
+// both lenses (block, quarantine) — mirrors the old inbox's list reload.
+function vqRetireIfCurrent(pk) {
+  const t = vqCard();
+  if (state.view === "review" && t && t.pk === pk) {
+    if (state.vqMeta) state.vqMeta.eligible_total = Math.max(0, (state.vqMeta.eligible_total || 1) - 1);
+    state.vqLastAdv = "";
+    state.vqIndex++;
+    renderVerdict();
+  }
 }
 
 async function setFlag(pk, flag, value) {
   await api(`/api/tracks/${pk}/flags`, { method: "PUT", body: JSON.stringify({ [flag]: !!value }) });
   toast(flag === "blocked_from_playlists" ? (value ? "Blocked" : "Unblocked") : (value ? "Won't recommend" : "Recommending"));
-  if (state.view === "library") loadTracks(); else if (state.view === "inbox") loadInbox();
+  if (state.view === "library") loadTracks();
+  if (value) vqRetireIfCurrent(pk);
 }
 
 async function wrongMatch(pk) {
   if (!confirm("Mark as wrong match? It will be quarantined and removed from playlists.")) return;
   await api(`/api/tracks/${pk}/wrong-match`, { method: "POST", body: "{}" });
-  toast("Quarantined → Needs Review");
-  if (state.view === "library") loadTracks(); else if (state.view === "inbox") loadInbox();
-}
-
-async function dismissTrack(pk) {
-  await api(`/api/tracks/${pk}/dismiss`, { method: "POST", body: "{}" });
-  toast("Dismissed from inbox");
-  loadInbox();
+  toast("Quarantined → Matches");
+  if (state.view === "library") loadTracks();
+  vqRetireIfCurrent(pk);
 }
 
 function more() { state.offset += state.limit; loadTracks(true); }
 
 async function rate(pk, rating) {
-  // The track may live in any pool (library, inbox, recent listens, now-playing).
-  const pools = [state.tracks || [], state.inbox || []];
-  let t = null;
-  for (const p of pools) { const f = p.find(x => x.track_pk === pk); if (f) { t = f; break; } }
+  const t = (state.tracks || []).find(x => x.track_pk === pk);
   const cur = t ? (t.personal_rating || 0) : 0;
   const newRating = (cur === rating) ? null : rating;  // tap same star = clear
   await api(`/api/tracks/${pk}/rating`, { method: "PUT", body: JSON.stringify({ rating: newRating }) });
   if (t) t.personal_rating = newRating;
   toast(newRating ? ["", "Like", "Really like", "Love", "Perfect ✦"][newRating] : "Rating cleared");
-  // Refresh the active view; reload the inbox badge (rating clears inbox membership).
   if (state.view === "library") renderLibrary();
-  else if (state.view === "inbox") loadInbox();
   else if (state.view === "home") loadHome();
-  if (state.view !== "inbox") loadInbox();
+  refreshBadges();   // rating retires a track from the Review "Newest" lens
 }
 
 // Layer display order + labels for the tap-palette.
@@ -657,7 +683,7 @@ async function addTag(pk) {
     try { state.profileList = (await api("/api/reference/profiles")).profiles || []; }
     catch (e) { state.profileList = []; }
   }
-  const t = (state.tracks.concat(state.inbox || [])).find(x => x.track_pk === pk) || {};
+  const t = findTrack(pk);
   const manual = new Set((t.tags || [])
     .filter(g => g.tag_type === "private_manual").map(g => g.tag.toLowerCase()));
 
@@ -769,7 +795,6 @@ function onPlayerState(e) {
 
 // Tracks visible in the current view, in display order — that's the queue.
 function currentViewTracks() {
-  if (state.view === "inbox") return state.inbox || [];
   return state.tracks || [];
 }
 // Prefer an explicitly-set playback id (e.g. an extended version), else the song.
@@ -864,7 +889,6 @@ function closePlayer() {
 // ── Source-playlist editing: cull tracks from your own YTM playlists ──
 function refreshActiveView() {
   if (state.view === "library") loadTracks();
-  else if (state.view === "inbox") loadInbox();
   else if (state.view === "home") loadHome();
 }
 
@@ -882,9 +906,8 @@ function undoToast(msg, onUndo) {
   toastTimer = setTimeout(hide, 6000);
 }
 
-// Tap a playlist chip's name → filter the current view to that playlist.
+// Tap a playlist chip's name → filter the Library to that playlist.
 function filterPlaylist(playlistId) {
-  if (state.view === "inbox") { state.inboxPlaylist = playlistId; loadInbox(); return; }
   state.sourcePlaylist = playlistId;
   if (state.view !== "library") switchView("library");   // switchView reloads + syncs dropdown
   else { loadSourcePlaylists(); loadTracks(); }
@@ -1109,7 +1132,7 @@ async function loadTagChips() {
   else tm.style.display = "none";
 }
 
-// Playlist dropdown ordering (client-side; shared by Library + Inbox).
+// Playlist dropdown ordering (client-side).
 function sortedSourcePlaylists() {
   const s = state.playlistSort;
   const byName = (a, b) => a.playlist_name.localeCompare(b.playlist_name, undefined, { sensitivity: "base" });
@@ -1200,40 +1223,35 @@ document.addEventListener("visibilitychange", () => {
   else if (state.view === "home") { loadHome(); startHomePolling(); }
 });
 
-// ── Inbox (T5) ──
-async function loadInbox() {
-  if (!state.sourcePlaylists.length) { try { state.sourcePlaylists = await api("/api/source-playlists"); } catch (e) {} }
-  const p = new URLSearchParams({ limit: 200 });
-  if (state.inboxPlaylist) p.set("source_playlist", state.inboxPlaylist);
-  const data = await api(`/api/inbox?${p}`);
-  state.inbox = data.tracks;
-  const badge = $("inboxbadge");
-  if (data.total) { badge.textContent = data.total; badge.style.display = ""; }
-  else badge.style.display = "none";
-  const filter = `<div class="filterbar inboxfilter">
-      <select id="inboxplaylist">${playlistOptionsHtml(state.inboxPlaylist)}</select>
-      <select id="inboxplsort" class="sortsel" title="sort playlists">${sortOptionsHtml()}</select>
-    </div>`;
-  $("inbox").innerHTML = filter + (data.tracks.length
-    ? data.tracks.map(t => trackCard(t, { dismiss: true })).join("")
-    : '<div class="empty">Inbox zero ✓ — nothing to triage.</div>');
-  $("inboxplaylist").onchange = (e) => { state.inboxPlaylist = e.target.value; loadInbox(); };
-  $("inboxplsort").onchange = (e) => { state.playlistSort = e.target.value; loadInbox(); };
+// ── Badges: Review remaining count + Matches pending-pairs count ──
+async function refreshBadges() {
+  try {
+    const q = await api("/api/verdict/queue?limit=1&sort=newest");
+    const badge = $("reviewbadge"), n = (q.meta || {}).eligible_total || 0;
+    if (n) { badge.textContent = n; badge.style.display = ""; }
+    else badge.style.display = "none";
+  } catch (e) {}
+  try {
+    const pairs = await api("/api/dedup");
+    const badge = $("matchesbadge");
+    if (pairs.length) { badge.textContent = pairs.length; badge.style.display = ""; }
+    else badge.style.display = "none";
+  } catch (e) {}
 }
 
-// ── Review: sub-tabs (Duplicates / Removed) ──
-async function loadReview() {
+// ── Matches: sub-tabs (Duplicates / Removed) — the dedup/match review queue ──
+async function loadMatches() {
   state.reviewPairs = await api("/api/dedup").catch(() => []);
-  const badge = $("reviewbadge");
+  const badge = $("matchesbadge");
   if (state.reviewPairs.length) { badge.textContent = state.reviewPairs.length; badge.style.display = ""; }
   else badge.style.display = "none";
-  const sub = state.reviewSub || "duplicates";
-  $("review").innerHTML = `<nav class="subtabs">
+  const sub = state.matchesSub || "duplicates";
+  $("matches").innerHTML = `<nav class="subtabs">
       <button id="sub-dup" class="${sub === "duplicates" ? "active" : ""}">Duplicates${state.reviewPairs.length ? ` <span class="badge">${state.reviewPairs.length}</span>` : ""}</button>
       <button id="sub-rem" class="${sub === "removed" ? "active" : ""}">Removed</button>
     </nav><div id="subcontent"></div>`;
-  $("sub-dup").onclick = () => { state.reviewSub = "duplicates"; loadReview(); };
-  $("sub-rem").onclick = () => { state.reviewSub = "removed"; loadReview(); };
+  $("sub-dup").onclick = () => { state.matchesSub = "duplicates"; loadMatches(); };
+  $("sub-rem").onclick = () => { state.matchesSub = "removed"; loadMatches(); };
   if (sub === "duplicates") renderDuplicates();
   else loadRemoved();
 }
@@ -1279,11 +1297,11 @@ async function undoRemoval(id) {
 async function mergePair(id) {
   if (!confirm("Merge these two tracks? The newer one is folded into the older.")) return;
   await api(`/api/dedup/${id}/merge`, { method: "POST", body: "{}" });
-  toast("Merged"); loadReview();
+  toast("Merged"); loadMatches();
 }
 async function dismissPair(id) {
   await api(`/api/dedup/${id}/dismiss`, { method: "POST", body: "{}" });
-  loadReview();
+  loadMatches();
 }
 
 // ── Tags admin: global hide-list + alias ──
@@ -1326,10 +1344,9 @@ async function aliasTag(tag) {
 // ── Tabs ──
 $("tab-home").onclick = () => switchView("home");
 $("tab-library").onclick = () => switchView("library");
-$("tab-inbox").onclick = () => switchView("inbox");
-$("tab-playlists").onclick = () => switchView("playlists");
 $("tab-review").onclick = () => switchView("review");
-$("tab-verdict").onclick = () => switchView("verdict");
+$("tab-playlists").onclick = () => switchView("playlists");
+$("tab-matches").onclick = () => switchView("matches");
 $("tab-tags").onclick = () => switchView("tags");
 $("tab-training").onclick = () => switchView("training");
 
@@ -1350,7 +1367,7 @@ $("pendingverbtn").onclick = () => {
 $("srcplaylist").onchange = (e) => { state.sourcePlaylist = e.target.value; loadTracks(); };
 $("plsort").onchange = (e) => { state.playlistSort = e.target.value; loadSourcePlaylists(); };
 
-const VIEWS = ["home", "library", "inbox", "playlists", "review", "verdict", "tags", "training"];
+const VIEWS = ["home", "library", "review", "playlists", "matches", "tags", "training"];
 function switchView(v) {
   state.view = v;
   VIEWS.forEach(name => {
@@ -1362,10 +1379,9 @@ function switchView(v) {
   $("filterbar").style.display = v === "library" ? "" : "none";
   if (v === "home") { loadHome(); startHomePolling(); } else { stopHomePolling(); }
   if (v === "library") { loadTracks(); loadSourcePlaylists(); }
-  if (v === "inbox") loadInbox();
+  if (v === "review") loadVerdict();
   if (v === "playlists") loadPlaylists();
-  if (v === "review") loadReview();
-  if (v === "verdict") loadVerdict();
+  if (v === "matches") loadMatches();
   if (v === "tags") loadTags();
   if (v === "training") loadTraining();
 }
@@ -1411,12 +1427,13 @@ async function loadTraining() {
   el.innerHTML = `<div class="trainhead">${intro}</div>${cards}`;
 }
 
-// ── Verdict Queue: the system names, you judge. <15s per track. ──
-// Reuses the bottom player bar as the "embedded IFrame". Suggestions come from
-// public tags (subgenre/family); the two micro-questions are the locked
-// functional + personal vocab. Commit-and-next fills the Training readiness bars.
+// ── Review: one queue, two sort lenses. One listen → rating + tags + cull. ──
+// The merged Inbox + Verdict surface. Reuses the bottom player bar as the
+// "embedded IFrame". Suggestions come from public tags (subgenre/family); the
+// two micro-questions are the locked functional + personal vocab. A card
+// retires on commit, dismiss, or skip — never on rating alone.
 async function loadVerdict() {
-  const el = $("verdict");
+  const el = $("review");
   if (!state.vqProfiles) {
     try {
       const d = await api("/api/reference/profiles");
@@ -1426,7 +1443,7 @@ async function loadVerdict() {
   el.innerHTML = '<div class="vq-strip">Loading queue…</div>';
   try {
     const [q, r] = await Promise.all([
-      api("/api/verdict/queue?limit=20"),
+      api(`/api/verdict/queue?limit=20&sort=${state.reviewSort}`),
       api("/api/reference/readiness"),
     ]);
     state.vq = q.tracks || []; state.vqMeta = q.meta || {}; state.vqIndex = 0;
@@ -1435,14 +1452,25 @@ async function loadVerdict() {
   renderVerdict();
 }
 
+function setReviewSort(s) {
+  if (s === state.reviewSort) return;
+  state.reviewSort = s; localStorage.setItem("reviewSort", s);
+  loadVerdict();
+}
+
 function vqStrip() {
-  const p = state.vqReadiness || [];
-  const ready = p.filter(x => x.ready).length;
+  const lens = `<span class="vq-lens">
+    <button class="${state.reviewSort === "newest" ? "on" : ""}" onclick="setReviewSort('newest')" title="unrated tracks, newest first — drain to zero">Newest</button>
+    <button class="${state.reviewSort === "training" ? "on" : ""}" onclick="setReviewSort('training')" title="tracks whose verdict most advances a profile">Training</button></span>`;
   const adv = state.vqLastAdv
     ? `<span class="vq-adv">↑ advanced ${esc(state.vqLastAdv)}</span>` : "<span></span>";
   const left = state.vqMeta ? (state.vqMeta.eligible_total || 0) : 0;
-  return `<div class="vq-strip"><span><b>${ready}</b> of ${p.length} profiles ready</span>`
-    + `${adv}<span><b>${left}</b> to judge</span></div>`;
+  if (state.reviewSort === "newest") {
+    return `<div class="vq-strip">${lens}${adv}<span><b>${left}</b> remaining</span></div>`;
+  }
+  const p = state.vqReadiness || [];
+  const ready = p.filter(x => x.ready).length;
+  return `<div class="vq-strip">${lens}${adv}<span><b>${ready}</b>/${p.length} profiles ready · <b>${left}</b> to judge</span></div>`;
 }
 
 function vqProfilesByLayer(layer) {
@@ -1450,14 +1478,16 @@ function vqProfilesByLayer(layer) {
 }
 
 function renderVerdict() {
-  const el = $("verdict");
+  const el = $("review");
   if (state.vqIndex >= state.vq.length) {
     if (state.vq.length && state.vqMeta && state.vqMeta.eligible_total > state.vq.length) {
       loadVerdict(); return;   // fetch a fresh batch (judged tracks won't return)
     }
     el.innerHTML = vqStrip()
-      + '<div class="empty">Nothing left to judge here. 🎉<br>'
-      + '<span class="vq-note"><a onclick="vqUnskipAll()">Re-serve skipped tracks</a></span></div>';
+      + `<div class="empty">${state.reviewSort === "newest"
+            ? "Review zero ✓ — nothing needs a first listen."
+            : "Nothing left to judge here. 🎉"}<br>`
+      + '<span class="vq-note"><a onclick="vqUnskipAll()">Re-serve tracks marked Later</a></span></div>';
     return;
   }
   const t = state.vq[state.vqIndex];
@@ -1497,6 +1527,10 @@ function renderVerdict() {
   const persChips = vqProfilesByLayer("personal").map(p =>
     `<span class="vq-chip ${t._sel.personal.has(p.tag_name) ? "on" : ""}" title="${esc(p.description || "")}" onclick="vqTogglePersonal('${esc(p.tag_name)}')">${esc(p.tag_name)}</span>`).join("");
 
+  const r = t.personal_rating || 0;
+  const ratingStars = [1, 2, 3, 4].map(i =>
+    `<button class="${i <= r ? "lit" : ""}" onclick="vqRate(${i})" title="${i}★ (${"zxcv"[i - 1]})">★</button>`).join("");
+
   el.innerHTML = vqStrip() + `<div class="vq-card">
     <div class="vq-head">
       <div>
@@ -1507,6 +1541,15 @@ function renderVerdict() {
       <button class="vq-play" onclick="vqPlay()" title="Play (space)">▶</button>
     </div>
     ${existing || chips ? `<div class="vq-existing">${existing}${chips}</div>` : ""}
+
+    <div class="vq-triage">
+      <button class="notforme" onclick="vqDismiss()" title="dismiss — stop showing me this (d)">✗ Not for me</button>
+      <button onclick="vqSkip()" title="defer — re-servable later (s)">→ Later</button>
+      <button class="more" onclick="trackMenu('${t.pk}')" title="more (block, don't recommend, cull, versions…)">⋯</button>
+    </div>
+
+    <div class="vq-seclbl">Rating <span class="vq-skiphint">z/x/c/v = 1–4★ · same again clears</span></div>
+    <div class="vq-stars">${ratingStars}</div>
 
     <div class="vq-seclbl">Suggestions <span class="vq-skiphint">1/2/3 = yes · ⇧1/2/3 = no</span></div>
     ${revealBtn}
@@ -1520,14 +1563,18 @@ function renderVerdict() {
 
     <div class="vq-foot">
       <button class="commit" onclick="vqCommit()">Commit &amp; next ⏎</button>
-      <button class="skip" onclick="vqSkip()">Skip (s)</button>
     </div>
     <div class="vq-note">
       <label class="vq-toggle"><input type="checkbox" ${state.vqGuessFirst ? "checked" : ""} onchange="vqToggleGuess(this.checked)"> Guess-first (hide suggestions until revealed)</label>
     </div>
   </div>`;
 
-  if (!state.isMobile) vqPlay();   // auto-play so you can judge by ear immediately
+  // Auto-play so you can judge by ear immediately — but only when the CARD
+  // changed. Re-renders from rating/chip taps must not restart the track.
+  if (!state.isMobile && state.vqPlayedPk !== t.pk) {
+    state.vqPlayedPk = t.pk;
+    vqPlay();
+  }
 }
 
 function vqCard() { return state.vq[state.vqIndex]; }
@@ -1584,12 +1631,44 @@ async function vqCommit() {
   renderVerdict();
 }
 
+// Later — a deferral, not a judgement. Re-servable via "Re-serve" / unskip-all.
 async function vqSkip() {
   const t = vqCard(); if (!t) return;
   try { await api(`/api/tracks/${t.pk}/verdict/skip`, { method: "POST", body: "{}" }); } catch (e) {}
   state.vqLastAdv = "";
   state.vqIndex++;
   if (state.vqMeta) state.vqMeta.eligible_total = Math.max(0, (state.vqMeta.eligible_total || 1) - 1);
+  renderVerdict();
+}
+
+// Not for me — a judgement ("stop showing me this"). Leaves BOTH lenses.
+async function vqDismiss() {
+  const t = vqCard(); if (!t) return;
+  try { await api(`/api/tracks/${t.pk}/dismiss`, { method: "POST", body: "{}" }); }
+  catch (e) { toast("Failed — try again"); return; }
+  toast("Not for me — won't show again");
+  state.vqLastAdv = "";
+  state.vqIndex++;
+  if (state.vqMeta) state.vqMeta.eligible_total = Math.max(0, (state.vqMeta.eligible_total || 1) - 1);
+  renderVerdict();
+}
+
+// One-tap rating on the card. Does NOT retire the card — retirement is
+// commit/dismiss/skip only — but a newly-rated track leaves the Newest lens,
+// so the drain count drops by one there.
+async function vqRate(rating) {
+  const t = vqCard(); if (!t) return;
+  const cur = t.personal_rating || 0;
+  const newRating = (cur === rating) ? null : rating;  // tap same star = clear
+  try {
+    await api(`/api/tracks/${t.pk}/rating`, { method: "PUT", body: JSON.stringify({ rating: newRating }) });
+  } catch (e) { toast("Failed — try again"); return; }
+  t.personal_rating = newRating;
+  toast(newRating ? ["", "Like", "Really like", "Love", "Perfect ✦"][newRating] : "Rating cleared");
+  if (state.reviewSort === "newest" && state.vqMeta) {
+    if (newRating && !cur) state.vqMeta.eligible_total = Math.max(0, (state.vqMeta.eligible_total || 1) - 1);
+    else if (!newRating && cur) state.vqMeta.eligible_total = (state.vqMeta.eligible_total || 0) + 1;
+  }
   renderVerdict();
 }
 
@@ -1615,16 +1694,22 @@ function vqShowTiebreakers() {
   document.body.appendChild(bg);
 }
 
-// Keyboard: only when the Verdict tab is active and nothing is being typed into.
+// Keyboard: only when the Review tab is active and nothing is being typed into.
+// space = play/pause · 1/2/3 = accept suggestion · ⇧1/2/3 = reject ·
+// z/x/c/v = rate 1–4★ · d = not for me · s = later · g = reveal · ⏎ = commit.
 document.addEventListener("keydown", (e) => {
-  if (state.view !== "verdict") return;
+  if (state.view !== "review") return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
   const tag = (e.target.tagName || "").toLowerCase();
   if (tag === "input" || tag === "textarea" || document.querySelector(".modal-bg")) return;
   const t = vqCard(); if (!t) return;
   if (e.code === "Space") { e.preventDefault(); togglePlay(); return; }
   if (e.code === "Enter") { e.preventDefault(); vqCommit(); return; }
   if (e.key === "s" || e.key === "S") { e.preventDefault(); vqSkip(); return; }
+  if (e.key === "d" || e.key === "D") { e.preventDefault(); vqDismiss(); return; }
   if (e.key === "g" || e.key === "G") { if (state.vqGuessFirst) vqReveal(); return; }
+  const star = { z: 1, x: 2, c: 3, v: 4 }[e.key.toLowerCase()];
+  if (star) { e.preventDefault(); vqRate(star); return; }
   const digit = { Digit1: 0, Digit2: 1, Digit3: 2 }[e.code];
   if (digit !== undefined) {
     e.preventDefault();
@@ -1634,7 +1719,7 @@ document.addEventListener("keydown", (e) => {
 
 document.querySelector('#ratingchips .chip[data-rating=""]').classList.add("active");
 loadStats(); loadTracks(); loadTagChips(); loadHome(); startHomePolling();
-loadInbox(); loadReview();   // populate tab badges on boot
+refreshBadges();   // populate the Review + Matches tab badges on boot
 </script>
 <!-- YouTube IFrame Player API — calls the global onYouTubeIframeAPIReady() above. -->
 <script src="https://www.youtube.com/iframe_api"></script>

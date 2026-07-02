@@ -20,9 +20,20 @@ Ordering (Stage 0, no vectors yet):
      than 2 consecutive tracks by the same artist are emitted;
   3. tie-break — has public tags > none, then added_at DESC.
 
-Exclusions: verdict-skipped, blocked_from_playlists, do_not_recommend,
-quarantined, no playable id, and tracks already carrying a private_manual tag
-for the functional/personal layer (the "Where in a set?" question is answered).
+Exclusions: verdict-skipped, inbox-dismissed (a dismissal is a judgement —
+"stop showing me this" — and leaves BOTH lenses), blocked_from_playlists,
+do_not_recommend, quarantined, no playable id, and tracks already carrying a
+private_manual tag for the functional/personal layer (the "Where in a set?"
+question is answered).
+
+Two sort lenses (the merged Review surface, 2026-07-02):
+  - 'training' — the original ordering below (under-trained-profile priority,
+    artist diversity, tie-breaks). Header metric: profile readiness.
+  - 'newest'  — inbox behaviour: created_at DESC, additionally requiring the
+    track to be UNRATED (rating alone retires a track from this lens — rated
+    tracks must not clutter the drain-to-zero count; rating stays out of the
+    training lens's eligibility because rating is preference, never training
+    signal). Header metric: remaining count.
 
 Reads effective_track_tags × tag_profiles at request time, so as enrichment and
 the subgenre vocab grow the queue gets richer with NO code change.
@@ -71,16 +82,46 @@ def _titlecase_tag(tag: str) -> str:
     return " ".join(w.capitalize() for w in (tag or "").split())
 
 
+# Eligibility shared by both lenses. The functional/personal private_manual
+# exclusion means "the micro-questions are already answered for this track".
+_BASE_ELIGIBILITY = """
+              t.verdict_skipped_at IS NULL
+              AND t.inbox_dismissed_at IS NULL
+              AND t.blocked_from_playlists = 0
+              AND t.do_not_recommend = 0
+              AND t.match_status != 'quarantined'
+              AND COALESCE(t.playback_video_id, t.ytm_track_id) IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM track_tags tt
+                  JOIN tag_profiles p
+                    ON REPLACE(REPLACE(LOWER(p.tag_name),'-',' '),'_',' ')
+                     = REPLACE(REPLACE(LOWER(tt.tag),'-',' '),'_',' ')
+                  WHERE tt.track_pk = t.track_pk
+                    AND tt.tag_type = 'private_manual'
+                    AND p.taxonomy_layer IN ('functional','personal')
+              )"""
+
+# The newest lens drains to zero: rating alone retires a track here.
+_NEWEST_ELIGIBILITY = _BASE_ELIGIBILITY + """
+              AND t.personal_rating IS NULL"""
+
+
 def build_queue(limit: int = 20, db_path: str | None = None,
-                scan_limit: int = DEFAULT_SCAN_LIMIT) -> dict:
+                scan_limit: int = DEFAULT_SCAN_LIMIT, sort: str = "training") -> dict:
     """
-    Build the ordered verdict queue.
+    Build the ordered review queue.
+
+    sort='training' (default): the original verdict ordering by training value.
+    sort='newest': inbox behaviour — unrated tracks, created_at DESC.
 
     Returns {"tracks": [...], "meta": {...}}. Each track dict:
       pk, title, artist, album, video_id (for the IFrame), playback_video_id,
+      personal_rating, blocked_from_playlists, do_not_recommend,
       tags (effective), playlists (source-playlist chips), suggestions.
     Each suggestion: {profile_id, tag_name, taxonomy_layer, score, evidence[]}.
     """
+    if sort not in ("training", "newest"):
+        raise ValueError(f"Unknown sort: {sort}")
     limit = max(1, min(limit, 100))
     conn = get_connection(db_path)
     try:
@@ -112,53 +153,30 @@ def build_queue(limit: int = 20, db_path: str | None = None,
             positive_artists.setdefault(row["pid"], set()).add(row["artist_key"] or "")
 
         # ── Candidate tracks (exclusions), newest first ──
+        # 'training' scans a window and re-orders by training value below;
+        # 'newest' IS created_at DESC, so the first `limit` rows are the queue.
+        eligibility = _NEWEST_ELIGIBILITY if sort == "newest" else _BASE_ELIGIBILITY
         rows = conn.execute(
             f"""
             SELECT t.track_pk, t.canonical_title, t.canonical_artist, t.album_title,
                    t.ytm_track_id, t.playback_video_id, t.created_at,
+                   t.personal_rating, t.blocked_from_playlists, t.do_not_recommend,
                    LOWER(COALESCE(t.normalized_artist, t.canonical_artist)) AS artist_key
             FROM tracks t
-            WHERE t.verdict_skipped_at IS NULL
-              AND t.blocked_from_playlists = 0
-              AND t.do_not_recommend = 0
-              AND t.match_status != 'quarantined'
-              AND COALESCE(t.playback_video_id, t.ytm_track_id) IS NOT NULL
-              AND NOT EXISTS (
-                  SELECT 1 FROM track_tags tt
-                  JOIN tag_profiles p
-                    ON REPLACE(REPLACE(LOWER(p.tag_name),'-',' '),'_',' ')
-                     = REPLACE(REPLACE(LOWER(tt.tag),'-',' '),'_',' ')
-                  WHERE tt.track_pk = t.track_pk
-                    AND tt.tag_type = 'private_manual'
-                    AND p.taxonomy_layer IN ('functional','personal')
-              )
+            WHERE {eligibility}
             ORDER BY t.created_at DESC
             LIMIT ?
             """,
-            (scan_limit,),
+            (limit if sort == "newest" else scan_limit,),
         ).fetchall()
         candidates = [dict(r) for r in rows]
         eligible_total = conn.execute(
-            """SELECT COUNT(*) AS n FROM tracks t
-               WHERE t.verdict_skipped_at IS NULL
-                 AND t.blocked_from_playlists = 0
-                 AND t.do_not_recommend = 0
-                 AND t.match_status != 'quarantined'
-                 AND COALESCE(t.playback_video_id, t.ytm_track_id) IS NOT NULL
-                 AND NOT EXISTS (
-                     SELECT 1 FROM track_tags tt
-                     JOIN tag_profiles p
-                       ON REPLACE(REPLACE(LOWER(p.tag_name),'-',' '),'_',' ')
-                        = REPLACE(REPLACE(LOWER(tt.tag),'-',' '),'_',' ')
-                     WHERE tt.track_pk = t.track_pk
-                       AND tt.tag_type = 'private_manual'
-                       AND p.taxonomy_layer IN ('functional','personal')
-                 )"""
+            f"SELECT COUNT(*) AS n FROM tracks t WHERE {eligibility}"
         ).fetchone()["n"]
 
         if not candidates:
             return {"tracks": [], "meta": {
-                "eligible_total": 0, "scanned": 0, "returned": 0,
+                "eligible_total": 0, "scanned": 0, "returned": 0, "sort": sort,
             }}
 
         pks = [c["track_pk"] for c in candidates]
@@ -255,6 +273,9 @@ def build_queue(limit: int = 20, db_path: str | None = None,
                 "album": c["album_title"],
                 "video_id": c["playback_video_id"] or c["ytm_track_id"],
                 "playback_video_id": c["playback_video_id"],
+                "personal_rating": c["personal_rating"],
+                "blocked_from_playlists": c["blocked_from_playlists"],
+                "do_not_recommend": c["do_not_recommend"],
                 "tags": eff_tags[pk],
                 "playlists": chips[pk],
                 "suggestions": suggestions,
@@ -266,10 +287,13 @@ def build_queue(limit: int = 20, db_path: str | None = None,
                 "_artist": artist_key,
             })
 
-        # Primary sort: training value, then has-tags, then newest.
-        scored.sort(key=lambda t: t["_order"], reverse=True)
-
-        ordered = _apply_artist_diversity(scored, limit)
+        if sort == "newest":
+            # Candidates are already created_at DESC and capped at limit.
+            ordered = scored
+        else:
+            # Primary sort: training value, then has-tags, then newest.
+            scored.sort(key=lambda t: t["_order"], reverse=True)
+            ordered = _apply_artist_diversity(scored, limit)
         for t in ordered:
             t.pop("_order", None)
             t.pop("_artist", None)
@@ -278,6 +302,7 @@ def build_queue(limit: int = 20, db_path: str | None = None,
             "scanned": len(candidates),
             "returned": len(ordered),
             "scan_truncated": eligible_total > len(candidates),
+            "sort": sort,
         }}
     finally:
         conn.close()
