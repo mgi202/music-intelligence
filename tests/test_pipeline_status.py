@@ -80,14 +80,23 @@ def test_zero_match_retry_cooldown(db, monkeypatch):
         insert_track(conn, "cold_miss", match_status="metadata_only")
         # Never attempted (no enrichment_state row) → selected
         insert_track(conn, "fresh", match_status="metadata_only")
+        # Ingested but never attempted: the ledger creates an es row with
+        # updated_at = ingest time and bandcamp_checked_at NULL → selected.
+        # (This is the whole backlog's shape — must NOT be deferred.)
+        insert_track(conn, "ingested_only", match_status="metadata_only")
+        conn.execute(
+            "INSERT INTO enrichment_state (track_pk, updated_at) VALUES (?, ?)",
+            ("ingested_only", iso_days_ago(1)),
+        )
         for pk, age in [("hot_miss", 1), ("cold_miss", 10)]:
             conn.execute(
-                "INSERT INTO enrichment_state (track_pk, updated_at) VALUES (?, ?)",
-                (pk, iso_days_ago(age)),
+                "INSERT INTO enrichment_state (track_pk, updated_at, bandcamp_checked_at) "
+                "VALUES (?, ?, ?)",
+                (pk, iso_days_ago(age), iso_days_ago(age)),
             )
 
     summary = run_pipeline(limit=100, db_path=db)
-    assert summary["processed"] == 2  # cold_miss + fresh, hot_miss skipped
+    assert summary["processed"] == 3  # cold_miss + fresh + ingested_only
 
     # Both attempted tracks now carry a fresh enrichment_state → an immediate
     # second pass selects nothing (no more same-batch churn).

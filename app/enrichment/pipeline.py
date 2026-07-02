@@ -48,10 +48,13 @@ _WEAK_TTL_DAYS = 30      # public_metadata_weak
 _ENRICHED_TTL_DAYS = 90  # metadata_enriched
 
 # Retry cooldown for zero-match tracks. A metadata_only track that has already
-# been attempted (it has an enrichment_state row — _enrich_track always writes
-# one) is not retried until this many days have passed. Without this, a wall of
-# permanently-unmatchable tracks at the head of created_at order starves the
-# queue: every pass re-processes the same batch and makes zero net progress.
+# been attempted is not retried until this many days have passed. Without this,
+# a wall of permanently-unmatchable tracks at the head of created_at order
+# starves the queue: every pass re-processes the same batch and makes zero net
+# progress. "Attempted" is enrichment_state.bandcamp_checked_at — the one stamp
+# _enrich_track writes on every attempt but ingestion never does (the ledger
+# creates es rows with updated_at at ingest time, so updated_at can't tell an
+# attempted track from a merely-ingested one).
 _RETRY_DAYS = int(os.getenv("ENRICHMENT_RETRY_DAYS", "7"))
 
 
@@ -75,9 +78,10 @@ def run_pipeline(
             weak_cutoff = (now - timedelta(days=_WEAK_TTL_DAYS)).isoformat()
             enriched_cutoff = (now - timedelta(days=_ENRICHED_TTL_DAYS)).isoformat()
             # Select fresh tracks plus stale ones past their re-enrichment TTL.
-            # "last enriched" is enrichment_state.updated_at. metadata_only
-            # tracks that were already attempted (es row exists) wait out the
-            # retry cooldown so zero-match tracks can't starve the queue.
+            # "last enriched" is enrichment_state.updated_at; "last attempted"
+            # is bandcamp_checked_at (see _RETRY_DAYS). metadata_only tracks
+            # already attempted wait out the retry cooldown so zero-match
+            # tracks can't starve the queue.
             rows = conn.execute("""
                 SELECT t.track_pk, t.canonical_title, t.canonical_artist,
                        t.normalized_title, t.normalized_artist,
@@ -85,7 +89,7 @@ def run_pipeline(
                 FROM tracks t
                 LEFT JOIN enrichment_state es ON es.track_pk = t.track_pk
                 WHERE (t.match_status = 'metadata_only'
-                       AND (es.updated_at IS NULL OR es.updated_at < ?))
+                       AND (es.bandcamp_checked_at IS NULL OR es.bandcamp_checked_at < ?))
                    OR (t.match_status = 'public_metadata_weak'
                        AND (es.updated_at IS NULL OR es.updated_at < ?))
                    OR (t.match_status = 'metadata_enriched'
@@ -267,6 +271,7 @@ def _enrich_track(track: dict, db_path: str | None) -> str:
             bc_result = bandcamp.enrich(title, artist, manual_url=bc_url)
             if bc_result.matched:
                 enrichment_flags["has_bandcamp_data"] = 1
+                enrichment_flags["bandcamp_checked_at"] = datetime.now(timezone.utc).isoformat()
                 if bc_result.tags:
                     source_count += 1
                     for tag in bc_result.tags:
