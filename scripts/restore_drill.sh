@@ -60,15 +60,16 @@ INTEGRITY="$(sqlite3 "$TMP_DB" 'PRAGMA integrity_check;' 2>&1 | head -1)"
 [ "$INTEGRITY" = "ok" ] || fail "integrity_check: $INTEGRITY"
 
 DIFF_MAX=0
-COUNTS="{}"
+COUNTS=""
 for table in tracks track_tags listens; do
     LIVE_N="$(sqlite3 "file:${LIVE_DB}?mode=ro" "SELECT COUNT(*) FROM $table;" 2>/dev/null || echo -1)"
     REST_N="$(sqlite3 "$TMP_DB" "SELECT COUNT(*) FROM $table;" 2>/dev/null || echo -1)"
     [ "$REST_N" -ge 0 ] || fail "restored DB missing table $table"
     DIFF=$(( LIVE_N - REST_N )); [ "$DIFF" -lt 0 ] && DIFF=$(( -DIFF ))
     [ "$DIFF" -gt "$DIFF_MAX" ] && DIFF_MAX=$DIFF
-    COUNTS="$(printf '%s' "$COUNTS" | sed "s/}$/\"$table\": {\"live\": $LIVE_N, \"restored\": $REST_N},}/" | sed 's/,}/}/')"
+    COUNTS="${COUNTS}${COUNTS:+, }\"$table\": {\"live\": $LIVE_N, \"restored\": $REST_N}"
 done
+COUNTS="{${COUNTS}}"
 [ "$DIFF_MAX" -le "$ROW_TOLERANCE" ] || fail "row-count drift $DIFF_MAX exceeds tolerance $ROW_TOLERANCE"
 
 printf '{"ok": true, "at": "%s", "integrity": "ok", "max_row_drift": %s, "tables": %s}\n' \
