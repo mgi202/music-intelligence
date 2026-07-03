@@ -229,6 +229,9 @@ CREATE TABLE IF NOT EXISTS tag_profiles (
     positive_prompt     TEXT,
     negative_prompt     TEXT,
     context_terms_json  TEXT,
+    -- Display order within a taxonomy layer (2026-07-03): functional chips
+    -- render in SET order (warm-up → closer), not alphabetically.
+    sort_order          INTEGER,
     created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

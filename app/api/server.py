@@ -117,6 +117,7 @@ def list_tracks(
     pending_versions: bool = Query(False, description="Only tracks with a pending playback-version candidate"),
     rating: Optional[int] = Query(None, ge=0, le=4, description="0 = unrated"),
     untagged: bool = Query(False, description="Only tracks with no effective tags"),
+    dismissed: bool = Query(False, description="Only Review-dismissed ('Not for me') tracks"),
     status: Optional[str] = Query(None),
     sort: str = Query("added_desc", pattern="^(added_desc|added_asc|artist|title|rating_desc|duration_desc)$"),
     limit: int = Query(100, le=500),
@@ -183,6 +184,11 @@ def list_tracks(
             conditions.append("t.personal_rating = ?")
             params.append(rating)
 
+    if dismissed:
+        # R11: dismissed tracks are visible, not gone — this filter is where
+        # "Not for me" verdicts live, each restorable from its row.
+        conditions.append("t.inbox_dismissed_at IS NOT NULL")
+
     if untagged:
         conditions.append(
             "NOT EXISTS (SELECT 1 FROM effective_track_tags tt "
@@ -214,7 +220,7 @@ def list_tracks(
                        t.duration_ms, t.ytm_track_id, t.spotify_track_id, t.isrc,
                        t.personal_rating, t.rated_at, t.match_status, t.created_at,
                        t.blocked_from_playlists, t.do_not_recommend, t.missing_since,
-                       t.playback_video_id,
+                       t.playback_video_id, t.inbox_dismissed_at,
                        (SELECT COUNT(*) FROM playback_version_candidates c
                          WHERE c.track_pk = t.track_pk AND c.status = 'pending')
                            AS pending_version_count
@@ -368,7 +374,8 @@ def reference_readiness():
     conn = get_connection()
     try:
         ids = [r["profile_id"] for r in conn.execute(
-            "SELECT profile_id FROM tag_profiles ORDER BY taxonomy_layer, profile_id"
+            "SELECT profile_id FROM tag_profiles "
+            "ORDER BY taxonomy_layer, COALESCE(sort_order, 999), profile_id"
         ).fetchall()]
     finally:
         conn.close()
@@ -474,9 +481,11 @@ def reference_profiles():
     from app.playlists.utility import FUNCTIONAL_TIEBREAKERS
     conn = get_connection()
     try:
+        # sort_order: set order for functional chips (R2) — never alphabetical.
         rows = conn.execute(
             "SELECT profile_id, tag_name, taxonomy_layer, description "
-            "FROM tag_profiles ORDER BY taxonomy_layer, tag_name"
+            "FROM tag_profiles "
+            "ORDER BY taxonomy_layer, COALESCE(sort_order, 999), tag_name"
         ).fetchall()
     finally:
         conn.close()
@@ -493,11 +502,13 @@ def verdict_queue(
     limit: int = Query(20, ge=1, le=100),
     sort: str = Query("training", pattern="^(training|newest)$",
                       description="training = by training value; newest = inbox behaviour (unrated, created_at DESC)"),
+    source_playlist: Optional[str] = Query(None,
+                      description="Restrict both lenses + counts to members of this YTM playlist_id"),
 ):
     """Review queue with ranked suggestions + evidence and the data the card
     needs (IFrame id, rating, effective tags, playlist chips)."""
     from app.tags import verdict_queue as vq
-    return vq.build_queue(limit=limit, sort=sort)
+    return vq.build_queue(limit=limit, sort=sort, source_playlist=source_playlist)
 
 
 @app.post("/api/tracks/{track_pk}/verdict/reject/{profile_id}")
@@ -1275,6 +1286,20 @@ def inbox(
         return {"total": total, "tracks": tracks}
     finally:
         conn.close()
+
+
+@app.post("/api/tracks/{track_pk}/undismiss")
+def undismiss_track(track_pk: str):
+    """Clear a 'Not for me' dismissal (R8 undo / R11 restore) — the track
+    re-enters both Review lenses and leaves Library → Dismissed."""
+    with db_conn() as conn:
+        result = conn.execute(
+            "UPDATE tracks SET inbox_dismissed_at = NULL, updated_at = ? WHERE track_pk = ?",
+            (datetime.now(timezone.utc).isoformat(), track_pk),
+        )
+        if result.rowcount == 0:
+            raise HTTPException(404, "Track not found")
+    return {"track_pk": track_pk, "dismissed": False}
 
 
 @app.post("/api/tracks/{track_pk}/dismiss")

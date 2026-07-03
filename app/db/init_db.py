@@ -122,6 +122,14 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE metrics_snapshots ADD COLUMN pass_type TEXT")
         print("Migration applied: metrics_snapshots.pass_type")
 
+    # 2026-07-03 (review refinement): display order for tag-profile chips —
+    # functional chips render in set order, not alphabetically. Values are
+    # (re)stamped by reconcile_tag_profiles on every init.
+    tp_cols = {row["name"] for row in conn.execute("PRAGMA table_info(tag_profiles)")}
+    if tp_cols and "sort_order" not in tp_cols:
+        conn.execute("ALTER TABLE tag_profiles ADD COLUMN sort_order INTEGER")
+        print("Migration applied: tag_profiles.sort_order")
+
     # playlist_rules: sync-safety columns (v3)
     pr_cols = {row["name"] for row in conn.execute("PRAGMA table_info(playlist_rules)")}
     if pr_cols and "last_synced_hash" not in pr_cols:

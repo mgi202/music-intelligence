@@ -253,66 +253,66 @@ def seed_example_rules(
 # functional (8) + personal (7) + the two kept subgenre profiles.
 LOCKED_TAG_PROFILES: list[dict] = [
     # ── Functional — a track's job in a set arc ──
-    {"profile_id": "warm-up", "tag_name": "warm-up", "taxonomy_layer": "functional",
+    {"profile_id": "warm-up", "sort_order": 0, "tag_name": "warm-up", "taxonomy_layer": "functional",
      "description": "Early-set, room-filling. Grooves without demanding attention; "
                     "leaves headroom. You'd play it to 20 people at 11pm.",
      "context_terms": ["warm up", "opener", "opening"]},
-    {"profile_id": "groover", "tag_name": "groover", "taxonomy_layer": "functional",
+    {"profile_id": "groover", "sort_order": 1, "tag_name": "groover", "taxonomy_layer": "functional",
      "description": "The engine room. Mid-set workhorse that sustains a plateau — "
                     "momentum without escalation.",
      "context_terms": ["groove", "rolling groove"]},
-    {"profile_id": "peak-time", "tag_name": "peak-time", "taxonomy_layer": "functional",
+    {"profile_id": "peak-time", "sort_order": 2, "tag_name": "peak-time", "taxonomy_layer": "functional",
      "description": "Maximum intensity. The track the hour is built around.",
      "context_terms": ["peak time", "peaktime"]},
-    {"profile_id": "afterhours", "tag_name": "afterhours", "taxonomy_layer": "functional",
+    {"profile_id": "afterhours", "sort_order": 4, "tag_name": "afterhours", "taxonomy_layer": "functional",
      "description": "Post-peak: darker, deeper, weirder, more hypnotic. 4am music — "
                     "intensity replaced by trance-induction.",
      "context_terms": ["after hours", "after-hours", "4am"]},
-    {"profile_id": "closer", "tag_name": "closer", "taxonomy_layer": "functional",
+    {"profile_id": "closer", "sort_order": 5, "tag_name": "closer", "taxonomy_layer": "functional",
      "description": "Last-track material. Emotional resolution or statement ending. "
                     "Rare by nature.",
      "context_terms": ["closing", "last track"]},
-    {"profile_id": "transition-tool", "tag_name": "transition-tool", "taxonomy_layer": "functional",
+    {"profile_id": "transition-tool", "sort_order": 6, "tag_name": "transition-tool", "taxonomy_layer": "functional",
      "description": "Not played for its own sake. DJ utility: long sparse intro/outro, "
                     "percussive bridge between styles or BPMs.",
      "context_terms": ["tool", "transition", "dj tool"]},
-    {"profile_id": "breather", "tag_name": "breather", "taxonomy_layer": "functional",
+    {"profile_id": "breather", "sort_order": 7, "tag_name": "breather", "taxonomy_layer": "functional",
      "description": "A deliberate mid-set dip — creates contrast so the next build "
                     "lands harder.",
      "context_terms": ["interlude", "downtempo break"]},
-    {"profile_id": "anthem", "tag_name": "anthem", "taxonomy_layer": "functional",
+    {"profile_id": "anthem", "sort_order": 3, "tag_name": "anthem", "taxonomy_layer": "functional",
      "description": "Recognisable, emotional, hands-in-air. About memorability, where "
                     "peak-time is about intensity. Can co-exist with peak-time.",
      "context_terms": ["anthemic", "hands in the air"]},
 
     # ── Personal — a concrete recurring listening moment ──
-    {"profile_id": "gym", "tag_name": "gym", "taxonomy_layer": "personal",
+    {"profile_id": "gym", "sort_order": 0, "tag_name": "gym", "taxonomy_layer": "personal",
      "description": "Training session. The doors-open-shoulders-back rotation.",
      "context_terms": ["workout", "training"]},
-    {"profile_id": "drive", "tag_name": "drive", "taxonomy_layer": "personal",
+    {"profile_id": "drive", "sort_order": 1, "tag_name": "drive", "taxonomy_layer": "personal",
      "description": "Behind the wheel, general.",
      "context_terms": ["driving", "car"]},
-    {"profile_id": "focus-work", "tag_name": "focus-work", "taxonomy_layer": "personal",
+    {"profile_id": "focus-work", "sort_order": 2, "tag_name": "focus-work", "taxonomy_layer": "personal",
      "description": "Desk deep work. Music as concentration scaffolding, no lyrics "
                     "grabbing attention.",
      "context_terms": ["focus", "deep work", "concentration"]},
-    {"profile_id": "pre-night-out", "tag_name": "pre-night-out", "taxonomy_layer": "personal",
+    {"profile_id": "pre-night-out", "sort_order": 3, "tag_name": "pre-night-out", "taxonomy_layer": "personal",
      "description": "Getting ready / pres. Building anticipation.",
      "context_terms": ["pre night out", "pres", "getting ready"]},
-    {"profile_id": "wind-down", "tag_name": "wind-down", "taxonomy_layer": "personal",
+    {"profile_id": "wind-down", "sort_order": 4, "tag_name": "wind-down", "taxonomy_layer": "personal",
      "description": "Evening decompress or comedown. Landing gear out.",
      "context_terms": ["wind down", "comedown", "decompress"]},
-    {"profile_id": "deep-listen", "tag_name": "deep-listen", "taxonomy_layer": "personal",
+    {"profile_id": "deep-listen", "sort_order": 5, "tag_name": "deep-listen", "taxonomy_layer": "personal",
      "description": "Headphones, full attention, nothing else happening. Music AS the "
                     "activity.",
      "context_terms": ["deep listen", "headphones", "active listening"]},
-    {"profile_id": "host", "tag_name": "host", "taxonomy_layer": "personal",
+    {"profile_id": "host", "sort_order": 6, "tag_name": "host", "taxonomy_layer": "personal",
      "description": "People over — cooking, dinner, background social. Sets tone "
                     "without dominating.",
      "context_terms": ["dinner", "hosting", "background social"]},
 
     # ── Subgenre — kept from the original seed; the rest arrive at vocab lock ──
-    {"profile_id": "warehouse-industrial", "tag_name": "warehouse-industrial",
+    {"profile_id": "warehouse-industrial", "sort_order": 0, "tag_name": "warehouse-industrial",
      "taxonomy_layer": "subgenre",
      "description": "Warehouse industrial techno: mechanical, heavy, maximum energy",
      "bpm_min": 128.0, "bpm_max": 138.0, "energy_min": 0.8, "energy_max": 1.0,
@@ -320,7 +320,7 @@ LOCKED_TAG_PROFILES: list[dict] = [
      "positive_prompt": "dark mechanical driving warehouse techno industrial percussion peak-time energy cold relentless",
      "negative_prompt": "melodic house pop vocal commercial EDM relaxed ambient uplifting trance",
      "context_terms": ["industrial", "warehouse", "mechanical", "hard techno", "brutal"]},
-    {"profile_id": "hypnotic-rolling", "tag_name": "hypnotic-rolling",
+    {"profile_id": "hypnotic-rolling", "sort_order": 1, "tag_name": "hypnotic-rolling",
      "taxonomy_layer": "subgenre",
      "description": "Hypnotic rolling techno: repetitive, trancey, steady groove",
      "bpm_min": 126.0, "bpm_max": 132.0, "energy_min": 0.65, "energy_max": 0.85,
@@ -367,6 +367,7 @@ def _profile_insert_params(p: dict, now: str) -> tuple:
         p.get("valence_min"), p.get("valence_max"),
         p.get("positive_prompt"), p.get("negative_prompt"),
         json.dumps(ctx) if ctx is not None else p.get("context_terms_json"),
+        p.get("sort_order"),
         now, now,
     )
 
@@ -399,8 +400,8 @@ def seed_starter_tag_profiles(db_path: str | None = None) -> int:
                     bpm_min, bpm_max, energy_min, energy_max,
                     valence_min, valence_max,
                     positive_prompt, negative_prompt, context_terms_json,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    sort_order, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, _profile_insert_params(p, now))
             inserted += 1
 
@@ -442,8 +443,9 @@ def reconcile_tag_profiles(db_path: str | None = None) -> dict:
             if pid in existing:
                 conn.execute(
                     "UPDATE tag_profiles SET description = ?, taxonomy_layer = ?, "
-                    "updated_at = ? WHERE profile_id = ?",
-                    (p["description"], p["taxonomy_layer"], now, pid),
+                    "sort_order = ?, updated_at = ? WHERE profile_id = ?",
+                    (p["description"], p["taxonomy_layer"], p.get("sort_order"),
+                     now, pid),
                 )
                 result["refreshed"].append(pid)
             else:
@@ -453,8 +455,8 @@ def reconcile_tag_profiles(db_path: str | None = None) -> dict:
                         bpm_min, bpm_max, energy_min, energy_max,
                         valence_min, valence_max,
                         positive_prompt, negative_prompt, context_terms_json,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        sort_order, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     _profile_insert_params(p, now),
                 )
                 result["inserted"].append(pid)

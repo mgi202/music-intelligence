@@ -84,8 +84,12 @@ def _titlecase_tag(tag: str) -> str:
 
 # Eligibility shared by both lenses. The functional/personal private_manual
 # exclusion means "the micro-questions are already answered for this track".
+# "Later" is a deferral, not a black hole (R6): a skip auto-returns after 14
+# days — expressed in pure SQL (datetime() normalises the ISO 'T' format) so
+# the fragment stays parameter-free for its other consumers (digest, counts).
 _BASE_ELIGIBILITY = """
-              t.verdict_skipped_at IS NULL
+              (t.verdict_skipped_at IS NULL
+               OR datetime(t.verdict_skipped_at) < datetime('now', '-14 days'))
               AND t.inbox_dismissed_at IS NULL
               AND t.blocked_from_playlists = 0
               AND t.do_not_recommend = 0
@@ -107,12 +111,15 @@ _NEWEST_ELIGIBILITY = _BASE_ELIGIBILITY + """
 
 
 def build_queue(limit: int = 20, db_path: str | None = None,
-                scan_limit: int = DEFAULT_SCAN_LIMIT, sort: str = "training") -> dict:
+                scan_limit: int = DEFAULT_SCAN_LIMIT, sort: str = "training",
+                source_playlist: str | None = None) -> dict:
     """
     Build the ordered review queue.
 
     sort='training' (default): the original verdict ordering by training value.
     sort='newest': inbox behaviour — unrated tracks, created_at DESC.
+    source_playlist: restrict both lenses (and their counts) to tracks that are
+    a member of this YTM playlist_id (R5).
 
     Returns {"tracks": [...], "meta": {...}}. Each track dict:
       pk, title, artist, album, video_id (for the IFrame), playback_video_id,
@@ -156,10 +163,16 @@ def build_queue(limit: int = 20, db_path: str | None = None,
         # 'training' scans a window and re-orders by training value below;
         # 'newest' IS created_at DESC, so the first `limit` rows are the queue.
         eligibility = _NEWEST_ELIGIBILITY if sort == "newest" else _BASE_ELIGIBILITY
+        elig_params: list = []
+        if source_playlist:
+            eligibility += """
+              AND EXISTS (SELECT 1 FROM track_playlist_membership m
+                          WHERE m.track_pk = t.track_pk AND m.playlist_id = ?)"""
+            elig_params.append(source_playlist)
         rows = conn.execute(
             f"""
             SELECT t.track_pk, t.canonical_title, t.canonical_artist, t.album_title,
-                   t.ytm_track_id, t.playback_video_id, t.created_at,
+                   t.ytm_track_id, t.playback_video_id, t.created_at, t.duration_ms,
                    t.personal_rating, t.blocked_from_playlists, t.do_not_recommend,
                    LOWER(COALESCE(t.normalized_artist, t.canonical_artist)) AS artist_key
             FROM tracks t
@@ -167,16 +180,22 @@ def build_queue(limit: int = 20, db_path: str | None = None,
             ORDER BY t.created_at DESC
             LIMIT ?
             """,
-            (limit if sort == "newest" else scan_limit,),
+            elig_params + [limit if sort == "newest" else scan_limit],
         ).fetchall()
         candidates = [dict(r) for r in rows]
         eligible_total = conn.execute(
-            f"SELECT COUNT(*) AS n FROM tracks t WHERE {eligibility}"
+            f"SELECT COUNT(*) AS n FROM tracks t WHERE {eligibility}", elig_params
         ).fetchone()["n"]
+        # Deferred counter (R6): drives the always-visible "Later: n · re-serve".
+        skipped_total = conn.execute(
+            "SELECT COUNT(*) FROM tracks WHERE verdict_skipped_at IS NOT NULL "
+            "AND datetime(verdict_skipped_at) >= datetime('now', '-14 days')"
+        ).fetchone()[0]
 
         if not candidates:
             return {"tracks": [], "meta": {
                 "eligible_total": 0, "scanned": 0, "returned": 0, "sort": sort,
+                "skipped_total": skipped_total,
             }}
 
         pks = [c["track_pk"] for c in candidates]
@@ -273,6 +292,7 @@ def build_queue(limit: int = 20, db_path: str | None = None,
                 "album": c["album_title"],
                 "video_id": c["playback_video_id"] or c["ytm_track_id"],
                 "playback_video_id": c["playback_video_id"],
+                "duration_ms": c["duration_ms"],
                 "personal_rating": c["personal_rating"],
                 "blocked_from_playlists": c["blocked_from_playlists"],
                 "do_not_recommend": c["do_not_recommend"],
@@ -303,6 +323,7 @@ def build_queue(limit: int = 20, db_path: str | None = None,
             "returned": len(ordered),
             "scan_truncated": eligible_total > len(candidates),
             "sort": sort,
+            "skipped_total": skipped_total,
         }}
     finally:
         conn.close()
