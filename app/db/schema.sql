@@ -605,6 +605,27 @@ CREATE TABLE IF NOT EXISTS playlist_removal_log (
 CREATE INDEX IF NOT EXISTS idx_removal_log_removed ON playlist_removal_log(removed_at);
 
 -- ─────────────────────────────────────────
+-- Home playback hub (2026-07-03)
+--
+-- playlist_pins — playlists the user pinned to the top of the Home tree.
+--                 References source playlists (track_playlist_membership
+--                 playlist_id), which have no table of their own, so no FK.
+-- play_queue    — THE persistent queue/set-crate (one per user, merged
+--                 concept). Ordered by position; delete-replace on save.
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS playlist_pins (
+    playlist_id TEXT PRIMARY KEY,
+    pinned_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS play_queue (
+    position  INTEGER PRIMARY KEY,       -- 0-based play order
+    track_pk  TEXT NOT NULL,
+    added_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (track_pk) REFERENCES tracks(track_pk) ON DELETE CASCADE
+);
+
+-- ─────────────────────────────────────────
 -- effective_track_tags — the canonical, user-facing tag set per track.
 -- Applies, in order: alias fold → global hide → per-track reject → dedup
 -- (collapsing the same tag arriving from multiple sources, which is what

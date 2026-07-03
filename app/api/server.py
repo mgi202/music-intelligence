@@ -69,6 +69,11 @@ class PlaybackVersionRequest(BaseModel):
     video: Optional[str] = None
 
 
+class QueueRequest(BaseModel):
+    # Full ordered replacement of the persistent play queue (Home hub).
+    track_pks: list[str] = Field(default_factory=list)
+
+
 def _parse_video_id(value: str | None) -> str | None:
     """Extract an 11-char YouTube videoId from a URL or accept a raw id."""
     if not value:
@@ -639,16 +644,125 @@ def unreject_tag(track_pk: str, tag: str):
 
 @app.get("/api/source-playlists")
 def list_source_playlists():
-    """Distinct source playlists with track counts. Powers the Library filter."""
+    """Distinct source playlists with track counts, pin state and last-update
+    recency. Powers the Library filter and the Home playlist tree."""
     conn = get_connection()
     try:
         rows = conn.execute(
-            """SELECT playlist_id, playlist_name, source, COUNT(*) AS n
-               FROM track_playlist_membership
-               GROUP BY playlist_id, source
-               ORDER BY n DESC, playlist_name COLLATE NOCASE"""
+            """SELECT m.playlist_id, m.playlist_name, m.source, COUNT(*) AS n,
+                      MAX(m.last_seen_at) AS last_seen,
+                      CASE WHEN p.playlist_id IS NULL THEN 0 ELSE 1 END AS pinned
+               FROM track_playlist_membership m
+               LEFT JOIN playlist_pins p ON p.playlist_id = m.playlist_id
+               GROUP BY m.playlist_id, m.source
+               ORDER BY pinned DESC, last_seen DESC, playlist_name COLLATE NOCASE"""
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@app.put("/api/source-playlists/{playlist_id}/pin")
+def pin_playlist(playlist_id: str):
+    """Pin a playlist to the top of the Home tree."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO playlist_pins (playlist_id) VALUES (?)", (playlist_id,)
+        )
+        conn.commit()
+        return {"playlist_id": playlist_id, "pinned": True}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/source-playlists/{playlist_id}/pin")
+def unpin_playlist(playlist_id: str):
+    """Remove a playlist's Home-tree pin."""
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM playlist_pins WHERE playlist_id = ?", (playlist_id,))
+        conn.commit()
+        return {"playlist_id": playlist_id, "pinned": False}
+    finally:
+        conn.close()
+
+
+# ─────────────────────────────────────────
+# Home hub: persistent play queue + forgotten gems (2026-07-03)
+# ─────────────────────────────────────────
+
+_QUEUE_TRACK_FIELDS = """t.track_pk, t.canonical_title, t.canonical_artist,
+                         t.album_title, t.ytm_track_id, t.playback_video_id,
+                         t.personal_rating, t.duration_ms"""
+
+
+@app.get("/api/queue")
+def get_queue():
+    """The persistent play queue (queue = set crate, merged concept), in order."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"""SELECT q.position, {_QUEUE_TRACK_FIELDS}
+                FROM play_queue q JOIN tracks t ON t.track_pk = q.track_pk
+                ORDER BY q.position"""
+        ).fetchall()
+        return {"queue": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.put("/api/queue")
+def put_queue(body: QueueRequest):
+    """Replace the persistent queue with the given ordered track list.
+
+    Delete-replace keeps ordering trivially consistent; the queue is small and
+    single-user. Unknown track_pks are skipped rather than erroring so a stale
+    client can't wedge the queue."""
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM play_queue")
+        kept = 0
+        for pk in body.track_pks:
+            row = conn.execute(
+                "SELECT 1 FROM tracks WHERE track_pk = ?", (pk,)
+            ).fetchone()
+            if row:
+                conn.execute(
+                    "INSERT INTO play_queue (position, track_pk) VALUES (?, ?)",
+                    (kept, pk),
+                )
+                kept += 1
+        conn.commit()
+        return {"count": kept}
+    finally:
+        conn.close()
+
+
+@app.get("/api/forgotten-gems")
+def forgotten_gems(months: int = Query(6, ge=1, le=36), limit: int = Query(40, le=100)):
+    """Highly-rated tracks (love/perfect) with no listen in `months` months —
+    including rated tracks with no recorded listen at all.
+
+    listens.listened_at is a unix epoch INTEGER, so the cutoff must be an
+    integer too — comparing INTEGER < TEXT in SQLite is always true (type
+    ordering), which would have matched every track."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"""SELECT {_QUEUE_TRACK_FIELDS}, MAX(l.listened_at) AS last_listened
+                FROM tracks t
+                LEFT JOIN listens l ON l.track_pk = t.track_pk
+                WHERE t.personal_rating >= 3
+                GROUP BY t.track_pk
+                HAVING last_listened IS NULL
+                    OR last_listened < CAST(strftime('%s', 'now', ?) AS INTEGER)
+                ORDER BY t.personal_rating DESC,
+                         last_listened IS NOT NULL, last_listened ASC
+                LIMIT ?""",
+            (f"-{months} months", limit),
+        ).fetchall()
+        return {"tracks": [dict(r) for r in rows]}
     finally:
         conn.close()
 
@@ -1171,18 +1285,24 @@ def dismiss_from_inbox(track_pk: str):
 
 @app.get("/api/recent-listens")
 def recent_listens(limit: int = Query(10, ge=1, le=50)):
-    """Latest listens resolved to library tracks, unrated first (T7)."""
+    """Latest listens resolved to library tracks, pure recency.
+
+    Home-redesign decision (2026-07-03): this list is a memory jog ("what was
+    that track from last night"), so it is ordered by listen time only — the
+    old unrated-first ordering broke recency scanning. Rating capture happens
+    inline via the star buttons instead.
+    """
     conn = get_connection()
     try:
         rows = conn.execute(
             """SELECT l.listened_at, l.source, t.track_pk, t.canonical_title,
                       t.canonical_artist, t.album_title, t.ytm_track_id,
-                      t.personal_rating, t.duration_ms
+                      t.playback_video_id, t.personal_rating, t.duration_ms
                FROM listens l
                JOIN tracks t ON t.track_pk = l.track_pk
                WHERE l.track_pk IS NOT NULL
                GROUP BY t.track_pk
-               ORDER BY (t.personal_rating IS NOT NULL), MAX(l.listened_at) DESC
+               ORDER BY MAX(l.listened_at) DESC
                LIMIT ?""",
             (limit,),
         ).fetchall()

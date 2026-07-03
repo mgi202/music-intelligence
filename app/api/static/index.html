@@ -28,9 +28,11 @@
   .chip { flex-shrink: 0; background: var(--panel2); border: 1px solid #2b2b38; color: var(--dim); padding: 5px 12px; border-radius: 999px; font-size: 12.5px; cursor: pointer; user-select: none; }
   .chip.active { background: var(--accent); color: #111; border-color: var(--accent); font-weight: 600; }
 
-  nav.tabs { display: flex; gap: 4px; margin-top: 8px; }
+  nav.tabs { display: flex; gap: 4px; margin-top: 8px; align-items: center; }
   nav.tabs button { flex: 1; background: none; border: none; color: var(--dim); padding: 8px; font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent; }
   nav.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+  #homesearch { margin-left: 8px; background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 5px 10px; border-radius: 8px; font-size: 12px; outline: none; width: 190px; flex: 0 0 auto; }
+  #homesearch:focus { border-color: var(--accent-dim); }
 
   main { padding: 10px 14px; }
   .stats { font-size: 12px; color: var(--dim); padding: 4px 0 10px; }
@@ -65,24 +67,86 @@
   .pl .actions button.danger { color: var(--danger); }
   .newpl { width: 100%; padding: 12px; border: 1px dashed #3a3a48; background: none; color: var(--dim); border-radius: var(--radius); cursor: pointer; font-size: 14px; margin-bottom: 10px; }
 
-  /* Player bar (desktop embed) */
-  #playerbar { position: fixed; bottom: 0; left: 0; right: 0; background: var(--panel); border-top: 1px solid #23232e; padding: 8px 14px; display: none; z-index: 30; }
+  /* Player — ONE component, two modes. hero-mode: in-flow at the very top of
+     the page (Home). bar-mode: fixed to the bottom (all other tabs). Same DOM
+     node in both — the YT iframe must never be reparented or it reloads and
+     playback stops; only classes change. */
+  #playerbar { display: none; }
   #playerbar.visible { display: block; }
-  #playerbar .nowplaying { font-size: 12px; color: var(--dim); margin-bottom: 6px; display: flex; justify-content: space-between; }
-  #playerbar .nowplaying b { color: var(--text); }
+  #playerbar.bar-mode { position: fixed; bottom: 0; left: 0; right: 0; background: var(--panel); border-top: 1px solid #23232e; padding: 8px 14px; z-index: 30; }
+  #playerbar.hero-mode { position: static; background: var(--panel); border-bottom: 1px solid #23232e; padding: 12px 14px; }
+  .pb-grid { display: flex; gap: 12px; align-items: center; }
+  #pb-art { width: 84px; height: 84px; border-radius: 6px; object-fit: cover; background: #000; flex-shrink: 0; display: none; }
+  #playerbar.hero-mode #pb-art { display: block; }
+  .pb-lbl { display: none; font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); margin-bottom: 3px; }
+  #playerbar.hero-mode .pb-lbl { display: block; }
+  #playerbar .nowplaying { font-size: 12px; color: var(--dim); display: flex; justify-content: space-between; gap: 8px; }
+  #playerbar .nowplaying b { color: var(--text); font-size: 13px; }
   #playerbar .closebtn { background: none; border: none; color: var(--dim); cursor: pointer; font-size: 14px; }
-  #playerbar .pb-inner { display: flex; gap: 12px; align-items: center; }
-  #ytplayer-wrap { width: 120px; height: 68px; flex-shrink: 0; border-radius: 6px; overflow: hidden; background: #000; }
-  #ytplayer, #ytplayer-wrap iframe { width: 120px; height: 68px; border: 0; }
+  #ytplayer-wrap { position: relative; width: 120px; height: 68px; flex-shrink: 0; border-radius: 6px; overflow: hidden; background: #000; }
+  #playerbar.hero-mode #ytplayer-wrap { width: 214px; height: 120px; }
+  #ytplayer, #ytplayer-wrap iframe { width: 100%; height: 100%; border: 0; }
+  #pb-expand { display: none; position: absolute; top: 4px; right: 4px; z-index: 2; background: rgba(0,0,0,.55); border: none; color: #fff; border-radius: 6px; cursor: pointer; font-size: 13px; padding: 2px 7px; }
+  #playerbar.hero-mode #pb-expand { display: block; }
   .pb-main { flex: 1; min-width: 0; }
   .pb-controls { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
   .pb-controls button { background: none; border: none; color: var(--text); font-size: 16px; cursor: pointer; padding: 2px 4px; line-height: 1; }
   .pb-controls button:hover { color: var(--accent); }
+  #pb-stars { display: none; }
+  #playerbar.hero-mode #pb-stars { display: block; }
+  #pb-stars .stars button { font-size: 15px; padding: 0 1px; }
+  .pb-tags { display: none; margin-top: 8px; gap: 6px; flex-wrap: wrap; align-items: center; }
+  #playerbar.hero-mode .pb-tags { display: flex; }
   .pb-time { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; min-width: 34px; text-align: center; }
   .pb-track { flex: 1; height: 6px; background: var(--panel2); border-radius: 999px; cursor: pointer; overflow: hidden; }
   .pb-fill { height: 100%; width: 0; background: var(--accent); border-radius: 999px; }
   .track.playing { box-shadow: inset 3px 0 0 var(--accent); }
-  #ytplayer { width: 100%; height: 80px; border: none; border-radius: 8px; }
+
+  /* Home hub: three panes (tree / table / queue) */
+  #home { display: grid; grid-template-columns: 200px minmax(0,1fr) 230px; gap: 12px; align-items: start; }
+  #remotestrip { grid-column: 1 / -1; display: none; align-items: center; gap: 10px; background: var(--panel); border: 1px solid #23232e; border-radius: var(--radius); padding: 8px 12px; font-size: 12.5px; }
+  #remotestrip.on { display: flex; }
+  #remotestrip .stars button { font-size: 15px; padding: 0 1px; }
+  .pane-mid { background: var(--panel); border: 1px solid #23232e; border-radius: var(--radius); padding: 8px; min-width: 0; }
+  .treeitem { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 8px; font-size: 13px; cursor: pointer; }
+  .treeitem:hover { background: var(--panel2); }
+  .treeitem.active { background: #26261a; color: var(--accent); }
+  .treeitem .tname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .treeitem .cnt { color: var(--dim); font-size: 11px; }
+  .treeitem .pinbtn { background: none; border: none; cursor: pointer; color: #3a3a48; font-size: 12px; padding: 0 2px; }
+  .treeitem .pinbtn.pinned { color: var(--accent); }
+  .treeitem.ghost { color: var(--dim); cursor: default; }
+  .treemore { background: none; border: none; color: var(--dim); font-size: 12px; cursor: pointer; padding: 6px 8px; display: block; }
+  .midhead { display: flex; justify-content: space-between; align-items: baseline; padding: 2px 6px 8px; gap: 8px; }
+  .midhead .t { font-size: 14px; font-weight: 600; }
+  .midhead .sub { color: var(--dim); font-size: 12px; font-weight: 400; }
+  .playallbtn { background: none; border: 1px solid #2b2b38; color: var(--accent); border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; flex-shrink: 0; }
+  #mid-rows { max-height: 62vh; overflow-y: auto; }
+  .midrow { display: flex; align-items: center; gap: 8px; padding: 6px; border-bottom: 1px solid #1f1f28; font-size: 13px; }
+  .midrow:last-child { border-bottom: none; }
+  .midrow .m { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .midrow .a { color: var(--dim); }
+  .midrow.playing { box-shadow: inset 3px 0 0 var(--accent); }
+  .midrow .stars button { font-size: 14px; padding: 1px; }
+  .midrow .qadd { background: none; border: none; color: var(--dim); cursor: pointer; font-size: 15px; line-height: 1; }
+  .midrow .qadd:hover { color: var(--accent); }
+  .qhead { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  .qhead .lbl { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); }
+  .qhead button { background: none; border: none; color: var(--dim); font-size: 11px; cursor: pointer; }
+  .qhead button:hover { color: var(--accent); }
+  .qrow { background: var(--panel); border: 1px solid #23232e; border-radius: 8px; padding: 6px 8px; margin-bottom: 4px; font-size: 12px; cursor: pointer; display: flex; gap: 6px; align-items: center; }
+  .qrow.current { border-color: var(--accent); }
+  .qrow .qm { flex: 1; min-width: 0; }
+  .qrow .qt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qrow .qa { color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qrow .qx { background: none; border: none; color: var(--dim); cursor: pointer; font-size: 13px; }
+  .qdrop { border: 1px dashed #3a3a48; border-radius: 8px; padding: 12px 8px; text-align: center; font-size: 11px; color: var(--dim); }
+  @media (max-width: 760px) {
+    #home { grid-template-columns: 1fr; }
+    #mid-rows { max-height: none; }
+    #homesearch { width: 120px; }
+    #playerbar.hero-mode #ytplayer-wrap { display: none; }
+  }
 
   /* Modal */
   .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 40; display: flex; align-items: flex-end; justify-content: center; }
@@ -105,11 +169,7 @@
   .sectionlbl { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); margin: 14px 0 8px; }
 
   /* Now-playing card */
-  .npcard { background: linear-gradient(135deg, #1a1a24, #15151c); border: 1px solid #2b2b38; border-left: 3px solid var(--accent); border-radius: var(--radius); padding: 14px; margin-bottom: 12px; }
-  .npcard .lbl { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--accent); }
-  .npcard .t { font-size: 16px; font-weight: 600; margin-top: 4px; }
-  .npcard .a { font-size: 13px; color: var(--dim); }
-  .npcard .unmatched { font-size: 11px; color: var(--dim); margin-top: 6px; font-style: italic; }
+  /* (npcard styles removed 2026-07-03 — Home hub replaced the old card) */
 
   /* ⋯ menu */
   .track .more { width: 30px; height: 30px; flex-shrink: 0; border-radius: 8px; border: 1px solid #2b2b38; background: var(--panel2); color: var(--dim); font-size: 16px; cursor: pointer; line-height: 1; }
@@ -267,6 +327,35 @@
 </head>
 <body>
 
+<!-- Player: hero-mode on Home (in flow, very top), bar-mode elsewhere (fixed
+     bottom). One DOM node — never reparent it, the YT iframe would reload. -->
+<div id="playerbar" class="bar-mode">
+  <div class="pb-grid">
+    <img id="pb-art" alt="" />
+    <div class="pb-main">
+      <div class="pb-lbl">Currently playing</div>
+      <div class="nowplaying">
+        <span id="np"></span>
+        <span style="flex-shrink:0">
+          <a id="np-ytm" href="#" target="_blank" style="color:var(--accent);font-size:12px;text-decoration:none;margin-right:12px">Open in YTM ↗</a>
+          <button class="closebtn" onclick="closePlayer()">✕</button>
+        </span>
+      </div>
+      <div class="pb-controls">
+        <button id="pb-prev" onclick="prevTrack()" title="Previous">⏮</button>
+        <button id="pb-play" onclick="togglePlay()" title="Play / pause">▶</button>
+        <button id="pb-next" onclick="nextTrack()" title="Next">⏭</button>
+        <span id="pb-cur" class="pb-time">0:00</span>
+        <div id="pb-track" class="pb-track"><div id="pb-fill" class="pb-fill"></div></div>
+        <span id="pb-dur" class="pb-time">0:00</span>
+        <span id="pb-stars"></span>
+      </div>
+      <div class="pb-tags" id="pb-tags"></div>
+    </div>
+    <div id="ytplayer-wrap"><div id="ytplayer"></div><button id="pb-expand" onclick="expandVideo()" title="Full screen">⛶</button></div>
+  </div>
+</div>
+
 <header>
   <h1>Music Intelligence <span id="trackcount"></span></h1>
   <div class="searchrow">
@@ -297,18 +386,36 @@
     <button id="tab-home" class="active">Home</button>
     <button id="tab-library">Library</button>
     <button id="tab-review">Review <span id="reviewbadge" class="badge" style="display:none"></span></button>
-    <button id="tab-playlists">Playlists</button>
+    <button id="tab-playlists">Rules</button>
     <button id="tab-matches">Matches <span id="matchesbadge" class="badge" style="display:none"></span></button>
     <button id="tab-tags">Tags</button>
     <button id="tab-training">Training</button>
+    <input id="homesearch" type="search" placeholder="Search or ask…" autocomplete="off">
   </nav>
 </header>
 
 <main>
   <div id="home">
-    <div id="npcard"></div>
-    <div class="sectionlbl" id="recentlbl" style="display:none">Recent listens</div>
-    <div id="recent"></div>
+    <div id="remotestrip"></div>
+    <div class="pane-left">
+      <div class="sectionlbl" style="margin-top:0">Playlists</div>
+      <div id="tree-playlists"></div>
+      <button class="treemore" id="treemore" onclick="toggleTreeMore()">all playlists ▾</button>
+      <div class="sectionlbl">Smart views</div>
+      <div id="tree-smart"></div>
+    </div>
+    <div class="pane-mid">
+      <div class="midhead">
+        <span><span class="t" id="mid-title"></span> <span class="sub" id="mid-sub"></span></span>
+        <button class="playallbtn" id="mid-playall" onclick="playAllMid()">▶ Play all</button>
+      </div>
+      <div id="mid-rows"></div>
+    </div>
+    <div class="pane-right">
+      <div class="qhead"><span class="lbl">Queue <span id="q-meta"></span></span><button onclick="clearQueue()">clear</button></div>
+      <div id="q-rows"></div>
+      <div class="qdrop">play a list or tap ⊕ on any track — the queue persists as your set crate</div>
+    </div>
   </div>
   <div class="stats" id="stats" style="display:none"></div>
   <div id="library" style="display:none"></div>
@@ -319,29 +426,6 @@
   <div id="training" style="display:none"></div>
 </main>
 
-<div id="playerbar">
-  <div class="pb-inner">
-    <div id="ytplayer-wrap"><div id="ytplayer"></div></div>
-    <div class="pb-main">
-      <div class="nowplaying">
-        <span id="np"></span>
-        <span>
-          <a id="np-ytm" href="#" target="_blank" style="color:var(--accent);font-size:12px;text-decoration:none;margin-right:12px">Open in YTM ↗</a>
-          <button class="closebtn" onclick="closePlayer()">✕</button>
-        </span>
-      </div>
-      <div class="pb-controls">
-        <button id="pb-prev" onclick="prevTrack()" title="Previous">⏮</button>
-        <button id="pb-play" onclick="togglePlay()" title="Play / pause">▶</button>
-        <button id="pb-next" onclick="nextTrack()" title="Next">⏭</button>
-        <span id="pb-cur" class="pb-time">0:00</span>
-        <div id="pb-track" class="pb-track"><div id="pb-fill" class="pb-fill"></div></div>
-        <span id="pb-dur" class="pb-time">0:00</span>
-      </div>
-    </div>
-  </div>
-</div>
-
 <div class="toast" id="toast"></div>
 
 <script>
@@ -350,6 +434,9 @@ const state = {
   offset: 0, limit: 100, total: 0,
   tracks: [], allTags: [], vocab: [], sourcePlaylists: [],
   matchesSub: "duplicates", reviewPairs: [], view: "home",
+  // Home hub state
+  plTree: [], treeExpanded: false, homeNode: null, homeTracks: [],
+  midTitle: "", midSub: "", pq: [],
   isMobile: /Android|iPhone|iPad/i.test(navigator.userAgent),
   queue: [], qIndex: -1,
   // Review queue (merged Inbox + Verdict surface)
@@ -665,9 +752,12 @@ async function rate(pk, rating) {
   const newRating = (cur === rating) ? null : rating;  // tap same star = clear
   await api(`/api/tracks/${pk}/rating`, { method: "PUT", body: JSON.stringify({ rating: newRating }) });
   if (t) t.personal_rating = newRating;
+  const pq = (state.pq || []).find(x => x.track_pk === pk);
+  if (pq) pq.personal_rating = newRating;
   toast(newRating ? ["", "Like", "Really like", "Love", "Perfect ✦"][newRating] : "Rating cleared");
   if (state.view === "library") renderLibrary();
-  else if (state.view === "home") loadHome();
+  else if (state.view === "home") { renderMid(); pollRemote(); }
+  if (currentPlayingPk() === pk) updateHeroMeta(pk);   // hero stars stay honest
   refreshBadges();   // rating retires a track from the Review "Newest" lens
 }
 
@@ -691,7 +781,13 @@ async function addTag(pk) {
   const bg = document.createElement("div");
   bg.className = "modal-bg";
   let changed = false;
-  const close = () => { bg.remove(); if (changed) { loadTracks(); loadTagChips(); } };
+  const close = () => {
+    bg.remove();
+    if (changed) {
+      refreshActiveView(); loadTagChips();
+      if (currentPlayingPk() === pk) updateHeroMeta(pk);
+    }
+  };
   bg.onclick = (ev) => { if (ev.target === bg) close(); };
 
   bg.innerHTML = `<div class="modal">
@@ -752,14 +848,16 @@ async function addTag(pk) {
 async function removeTag(pk, tag) {
   if (!confirm(`Remove your manual tag "${tag}"?`)) return;
   await api(`/api/tracks/${pk}/tags/${encodeURIComponent(tag)}`, { method: "DELETE" });
-  await loadTracks(); loadTagChips();
+  refreshActiveView(); loadTagChips();
+  if (currentPlayingPk() === pk) updateHeroMeta(pk);
 }
 
 // Reject an auto-pulled tag for THIS track only. Survives re-enrichment.
 async function rejectTag(pk, tag) {
   if (!confirm(`Reject "${tag}" on this track?\n\nIt won't show here or count toward playlists, and won't return on re-enrichment. To hide a tag across your whole library, use the Tags tab instead.`)) return;
   await api(`/api/tracks/${pk}/tags/${encodeURIComponent(tag)}/reject`, { method: "POST", body: "{}" });
-  await loadTracks(); loadTagChips();
+  refreshActiveView(); loadTagChips();
+  if (currentPlayingPk() === pk) updateHeroMeta(pk);
   toast(`Rejected: ${tag}`);
 }
 
@@ -811,13 +909,11 @@ function playFromList(pk) {
     if (t) play(playableId(t), `${t.canonical_artist} — ${t.canonical_title}`, pk, !!t.playback_video_id);
     return;
   }
-  const queue = playable.map(t => ({
-    videoId: playableId(t),
-    label: `${t.canonical_artist} — ${t.canonical_title}`,
-    pk: t.track_pk,
-    ext: !!t.playback_video_id,
-  }));
-  _startQueue(queue, idx);
+  // Playing a list REPLACES the persistent queue (queue = set crate, one
+  // object). One-off single plays (the fallback above) leave the crate alone.
+  state.pq = playable.slice();
+  persistQueue(); renderQueue();
+  _startQueue(playable.map(qItem), idx);
 }
 
 // Low-level single-item play (used by Home/now-playing/recent callers).
@@ -845,7 +941,31 @@ function loadQ(i) {
   $("np").innerHTML = `<b>${esc(item.label)}</b>` +
     (item.ext ? ' <span style="color:var(--accent);font-size:11px">· extended</span>' : "");
   $("np-ytm").href = `https://music.youtube.com/watch?v=${item.videoId}`;
+  // Hero extras: art from the playing video's thumbnail (no storage needed),
+  // stars + tag row fetched per track change.
+  $("pb-art").src = `https://i.ytimg.com/vi/${item.videoId}/mqdefault.jpg`;
+  updateHeroMeta(item.pk);
   highlightPlaying(item.pk);
+  renderQueue();
+}
+
+async function updateHeroMeta(pk) {
+  $("pb-stars").innerHTML = ""; $("pb-tags").innerHTML = "";
+  if (!pk) return;
+  try {
+    const t = await api(`/api/tracks/${pk}`);
+    if (currentPlayingPk() !== pk) return;   // user skipped while we fetched
+    $("pb-stars").innerHTML = starButtons(t);
+    const tags = (t.tags || []).map(g =>
+      `<span class="tag ${g.tag_type === "private_manual" ? "manual" : "auto"}">${esc(g.tag)}</span>`).join("");
+    $("pb-tags").innerHTML = tags + `<button class="addtag" onclick="addTag('${pk}')">+ tag</button>`;
+  } catch (e) {}
+}
+
+function expandVideo() {
+  const w = $("ytplayer-wrap");
+  if (document.fullscreenElement) document.exitFullscreen();
+  else if (w.requestFullscreen) w.requestFullscreen();
 }
 
 function nextTrack() {
@@ -874,8 +994,11 @@ function startProg() {
 function fmtTime(s) { s = Math.floor(s || 0); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
 
 function highlightPlaying(pk) {
-  document.querySelectorAll(".track.playing").forEach(el => el.classList.remove("playing"));
-  if (pk) { const el = document.getElementById("tr-" + pk); if (el) el.classList.add("playing"); }
+  document.querySelectorAll(".track.playing, .midrow.playing").forEach(el => el.classList.remove("playing"));
+  if (pk) {
+    const el = document.getElementById("tr-" + pk); if (el) el.classList.add("playing");
+    const mr = document.getElementById("mr-" + pk); if (mr) mr.classList.add("playing");
+  }
 }
 
 function closePlayer() {
@@ -883,7 +1006,10 @@ function closePlayer() {
   if (progTimer) { clearInterval(progTimer); progTimer = null; }
   state.queue = []; state.qIndex = -1;
   $("playerbar").classList.remove("visible");
+  $("pb-art").removeAttribute("src");
+  $("pb-stars").innerHTML = ""; $("pb-tags").innerHTML = "";
   highlightPlaying(null);
+  renderQueue();   // drop the 'current' ring; the crate itself persists
 }
 
 // ── Source-playlist editing: cull tracks from your own YTM playlists ──
@@ -1183,44 +1309,227 @@ $("search").addEventListener("input", (e) => {
   searchTimer = setTimeout(() => { state.q = e.target.value.trim(); loadTracks(); }, 300);
 });
 
-// ── Home: now-playing + recent listens (T7) ──
+// ── Home hub: playlist tree + node table + persistent queue (2026-07-03) ──
+// Left: pinned-first playlist tree + smart views. Middle: the selected node's
+// tracks, one compact row each. Right: THE queue — up-next and set-crate are
+// one merged, server-persisted object.
+
 async function loadHome() {
+  loadTree();
+  loadServerQueue();
+  pollRemote();
+  const saved = state.homeNode
+    || JSON.parse(localStorage.getItem("homeNode") || "null")
+    || { type: "recent" };
+  selectNode(saved, false);
+}
+
+async function loadTree() {
+  try { state.plTree = await api("/api/source-playlists"); }
+  catch (e) { state.plTree = []; }
+  renderTree();
+}
+
+const SMART_NODES = [
+  { type: "recent", name: "🕘 Recent listens" },
+  { type: "gems",   name: "💎 Forgotten gems" },
+];
+
+function renderTree() {
+  const pls = state.plTree || [];
+  const pinnedCount = pls.filter(p => p.pinned).length;
+  const cap = Math.max(8, pinnedCount);
+  const shown = state.treeExpanded ? pls : pls.slice(0, cap);
+  $("tree-playlists").innerHTML = shown.map((p, i) => {
+    const active = state.homeNode && state.homeNode.type === "playlist"
+      && state.homeNode.id === p.playlist_id;
+    return `<div class="treeitem ${active ? "active" : ""}" onclick="selectPlaylistByIdx(${i})">
+      <button class="pinbtn ${p.pinned ? "pinned" : ""}" onclick="event.stopPropagation();togglePinByIdx(${i})"
+        title="${p.pinned ? "unpin from top" : "pin to top"}">📌</button>
+      <span class="tname">${esc(p.playlist_name)}</span><span class="cnt">${p.n}</span>
+    </div>`;
+  }).join("") || '<div class="empty">No playlists ingested yet.</div>';
+  const more = $("treemore");
+  more.style.display = pls.length > cap ? "" : "none";
+  more.textContent = state.treeExpanded ? "fewer playlists ▴" : `all playlists (${pls.length}) ▾`;
+  $("tree-smart").innerHTML = SMART_NODES.map(s => {
+    const active = state.homeNode && state.homeNode.type === s.type;
+    return `<div class="treeitem ${active ? "active" : ""}" onclick="selectNode({type:'${s.type}'})">
+      <span class="tname">${s.name}</span></div>`;
+  }).join("")
+  + '<div class="treeitem ghost" title="New releases from watched labels, scored against your profiles — arrives with Stage 1 audio enrichment">📡 Discovery · stage 1</div>';
+}
+
+function toggleTreeMore() { state.treeExpanded = !state.treeExpanded; renderTree(); }
+function selectPlaylistByIdx(i) {
+  const p = (state.plTree || [])[i];
+  if (p) selectNode({ type: "playlist", id: p.playlist_id, name: p.playlist_name });
+}
+async function togglePinByIdx(i) {
+  const p = (state.plTree || [])[i];
+  if (!p) return;
+  await api(`/api/source-playlists/${encodeURIComponent(p.playlist_id)}/pin`,
+    { method: p.pinned ? "DELETE" : "PUT" });
+  await loadTree();
+}
+
+async function selectNode(node, save = true) {
+  state.homeNode = node;
+  if (save && node.type !== "search") localStorage.setItem("homeNode", JSON.stringify(node));
+  renderTree();
+  let tracks = [], title = "", sub = "";
+  try {
+    if (node.type === "playlist") {
+      const d = await api(`/api/tracks?source_playlist=${encodeURIComponent(node.id)}&limit=500`);
+      tracks = d.tracks; title = node.name || "Playlist";
+    } else if (node.type === "recent") {
+      const d = await api("/api/recent-listens?limit=40");
+      tracks = d.listens || []; title = "Recent listens"; sub = "last 40 · newest first";
+    } else if (node.type === "gems") {
+      const d = await api("/api/forgotten-gems");
+      tracks = d.tracks || []; title = "Forgotten gems"; sub = "loved, not heard in 6+ months";
+    } else if (node.type === "search") {
+      const d = await api(`/api/tracks?q=${encodeURIComponent(node.q)}&limit=200`);
+      tracks = d.tracks; title = "Search";
+      sub = `“${node.q}” · ${d.total} match${d.total === 1 ? "" : "es"}`;
+    }
+  } catch (e) { tracks = []; }
+  state.homeTracks = tracks;
+  state.tracks = tracks;   // playFromList/star toggles read the visible list
+  state.midTitle = title; state.midSub = sub;
+  renderMid();
+}
+
+function fmtDur(ms) {
+  const m = Math.round(ms / 60000);
+  return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} m` : `${m} m`;
+}
+
+function renderMid() {
+  const tracks = state.homeTracks || [];
+  $("mid-title").textContent = state.midTitle || "";
+  const durMs = tracks.reduce((s, t) => s + (t.duration_ms || 0), 0);
+  $("mid-sub").textContent = state.midSub
+    || (tracks.length ? `${tracks.length} tracks${durMs ? " · " + fmtDur(durMs) : ""}` : "");
+  $("mid-playall").style.display = tracks.some(playableId) ? "" : "none";
+  $("mid-rows").innerHTML = tracks.map(midRow).join("")
+    || '<div class="empty">Nothing here yet.</div>';
+  highlightPlaying(currentPlayingPk());
+}
+
+function midRow(t) {
+  const ext = t.playback_video_id
+    ? ' <span style="color:var(--accent);font-size:10px" title="plays a set extended/video version">ext</span>' : "";
+  return `<div class="midrow" id="mr-${t.track_pk}">
+    <button class="playbtn" ${playableId(t) ? "" : "disabled"} onclick="playFromList('${t.track_pk}')" title="Play from here">▶</button>
+    <span class="m">${esc(t.canonical_title)}${ext} <span class="a">· ${esc(t.canonical_artist)}</span></span>
+    ${starButtons(t)}
+    <button class="qadd" onclick="queueAdd('${t.track_pk}')" title="Add to queue">⊕</button>
+    <button class="more" onclick="trackMenu('${t.track_pk}')" title="more">⋯</button>
+  </div>`;
+}
+
+function playAllMid() {
+  const first = (state.homeTracks || []).find(playableId);
+  if (first) playFromList(first.track_pk);
+}
+
+// ── The queue (= set crate). Server-persisted; survives sessions. ──
+async function loadServerQueue() {
+  try { state.pq = (await api("/api/queue")).queue || []; }
+  catch (e) { state.pq = []; }
+  renderQueue();
+}
+
+function renderQueue() {
+  const pq = state.pq || [];
+  const durMs = pq.reduce((s, t) => s + (t.duration_ms || 0), 0);
+  $("q-meta").textContent = pq.length ? `· ${pq.length}${durMs ? " · " + fmtDur(durMs) : ""}` : "";
+  const cur = currentPlayingPk();
+  $("q-rows").innerHTML = pq.map((t, i) => `
+    <div class="qrow ${t.track_pk === cur ? "current" : ""}" onclick="playQueueFrom(${i})" title="Play from here">
+      <div class="qm"><div class="qt">${esc(t.canonical_title)}</div>
+        <div class="qa">${esc(t.canonical_artist)}${t.duration_ms ? " · " + fmtTime(t.duration_ms / 1000) : ""}</div></div>
+      <button class="qx" onclick="event.stopPropagation();queueRemove(${i})" title="Remove from queue">✕</button>
+    </div>`).join("");
+}
+
+function persistQueue() {
+  api("/api/queue", {
+    method: "PUT",
+    body: JSON.stringify({ track_pks: (state.pq || []).map(t => t.track_pk) }),
+  }).catch(() => {});
+}
+
+async function queueAdd(pk) {
+  if ((state.pq || []).some(x => x.track_pk === pk)) { toast("Already in queue"); return; }
+  let t = (state.homeTracks || []).find(x => x.track_pk === pk)
+       || (state.tracks || []).find(x => x.track_pk === pk);
+  if (!t) { try { t = await api(`/api/tracks/${pk}`); } catch (e) { return; } }
+  state.pq.push(t); persistQueue(); renderQueue();
+  toast("Added to queue");
+}
+function queueRemove(i) { state.pq.splice(i, 1); persistQueue(); renderQueue(); }
+function clearQueue() {
+  if (!(state.pq || []).length) return;
+  state.pq = []; persistQueue(); renderQueue();
+}
+function qItem(t) {
+  return { videoId: playableId(t), label: `${t.canonical_artist} — ${t.canonical_title}`,
+           pk: t.track_pk, ext: !!t.playback_video_id };
+}
+function playQueueFrom(i) {
+  const pq = state.pq || [];
+  if (!pq[i]) return;
+  const playable = pq.filter(playableId);
+  const idx = playable.findIndex(t => t.track_pk === pq[i].track_pk);
+  if (idx < 0) { toast("No playable version for this track"); return; }
+  _startQueue(playable.map(qItem), idx);
+}
+function currentPlayingPk() {
+  return (state.queue && state.qIndex >= 0 && state.queue[state.qIndex])
+    ? state.queue[state.qIndex].pk : null;
+}
+
+// ── Remote-listening strip: what the phone (ListenBrainz) is playing, shown
+//    only while the local player is idle. Zero height otherwise. ──
+async function pollRemote() {
+  const el = $("remotestrip");
   try {
     const np = await api("/api/now-playing");
-    const el = $("npcard");
-    if (np.playing) {
+    const localActive = typeof YT !== "undefined" && ytReady && ytPlayer.getPlayerState
+      && [YT.PlayerState.PLAYING, YT.PlayerState.PAUSED, YT.PlayerState.BUFFERING]
+          .includes(ytPlayer.getPlayerState());
+    if (np.playing && !localActive) {
       const p = np.playing, t = p.track;
-      el.innerHTML = `<div class="npcard">
-        <div class="lbl">▶ Now playing</div>
-        <div class="t">${esc(t ? t.canonical_title : p.track_name || "")}</div>
-        <div class="a">${esc(t ? t.canonical_artist : p.artist_name || "")}</div>
-        ${t ? `<div style="margin-top:10px">${starButtons(t)}</div>`
-            : '<div class="unmatched">Not in your library yet — rate it from recent listens below once it lands.</div>'}
-      </div>`;
-      if (t) el.querySelector(".stars").dataset.pk = t.track_pk;
-    } else {
-      el.innerHTML = "";
-    }
-  } catch (e) { $("npcard").innerHTML = ""; }
-
-  try {
-    const data = await api("/api/recent-listens?limit=10");
-    const list = data.listens || [];
-    $("recentlbl").style.display = list.length ? "" : "none";
-    $("recent").innerHTML = list.map(t => trackCard(t)).join("")
-      || '<div class="empty">No recent listens yet.</div>';
-  } catch (e) { $("recent").innerHTML = ""; }
+      el.innerHTML = `<span>📱</span><span style="color:var(--dim)">Listening on phone:</span>
+        <b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t ? t.canonical_title : p.track_name || "")}
+          <span style="color:var(--dim);font-weight:400">· ${esc(t ? t.canonical_artist : p.artist_name || "")}</span></b>
+        ${t ? starButtons(t) : '<span style="color:var(--dim);font-size:11px">not in library yet</span>'}`;
+      el.classList.add("on");
+    } else { el.classList.remove("on"); el.innerHTML = ""; }
+  } catch (e) { el.classList.remove("on"); el.innerHTML = ""; }
 }
 
 let npTimer;
 function startHomePolling() {
   stopHomePolling();
-  npTimer = setInterval(() => { if (!document.hidden && state.view === "home") loadHome(); }, 15000);
+  npTimer = setInterval(() => { if (!document.hidden && state.view === "home") pollRemote(); }, 15000);
 }
 function stopHomePolling() { if (npTimer) clearInterval(npTimer); npTimer = null; }
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) stopHomePolling();
-  else if (state.view === "home") { loadHome(); startHomePolling(); }
+  else if (state.view === "home") { pollRemote(); startHomePolling(); }
+});
+
+let homeSearchTimer;
+$("homesearch").addEventListener("input", (e) => {
+  clearTimeout(homeSearchTimer);
+  homeSearchTimer = setTimeout(() => {
+    const q = e.target.value.trim();
+    if (q) selectNode({ type: "search", q }, false);
+    else selectNode(JSON.parse(localStorage.getItem("homeNode") || "null") || { type: "recent" }, false);
+  }, 300);
 });
 
 // ── Badges: Review remaining count + Matches pending-pairs count ──
@@ -1383,6 +1692,10 @@ function switchView(v) {
   $("tagchips").style.display = lib ? "" : "none";
   $("stats").style.display = lib ? "" : "none";
   $("filterbar").style.display = lib ? "" : "none";
+  // Home-only compact search; player switches hero (Home) ↔ bottom bar (rest).
+  $("homesearch").style.display = v === "home" ? "" : "none";
+  $("playerbar").classList.toggle("hero-mode", v === "home");
+  $("playerbar").classList.toggle("bar-mode", v !== "home");
   if (v === "home") { loadHome(); startHomePolling(); } else { stopHomePolling(); }
   if (v === "library") { loadTracks(); loadSourcePlaylists(); }
   if (v === "review") loadVerdict();
