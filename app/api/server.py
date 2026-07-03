@@ -116,8 +116,9 @@ def list_tracks(
     source_playlist: Optional[str] = Query(None, description="Filter to a YTM source playlist_id"),
     pending_versions: bool = Query(False, description="Only tracks with a pending playback-version candidate"),
     rating: Optional[int] = Query(None, ge=0, le=4, description="0 = unrated"),
+    untagged: bool = Query(False, description="Only tracks with no effective tags"),
     status: Optional[str] = Query(None),
-    sort: str = Query("added_desc", pattern="^(added_desc|added_asc|artist|title|rating_desc)$"),
+    sort: str = Query("added_desc", pattern="^(added_desc|added_asc|artist|title|rating_desc|duration_desc)$"),
     limit: int = Query(100, le=500),
     offset: int = Query(0, ge=0),
 ):
@@ -182,6 +183,12 @@ def list_tracks(
             conditions.append("t.personal_rating = ?")
             params.append(rating)
 
+    if untagged:
+        conditions.append(
+            "NOT EXISTS (SELECT 1 FROM effective_track_tags tt "
+            "WHERE tt.track_pk = t.track_pk)"
+        )
+
     if status:
         conditions.append("t.match_status = ?")
         params.append(status)
@@ -192,6 +199,7 @@ def list_tracks(
         "artist": "t.canonical_artist COLLATE NOCASE, t.canonical_title COLLATE NOCASE",
         "title": "t.canonical_title COLLATE NOCASE",
         "rating_desc": "t.personal_rating DESC NULLS LAST, t.created_at DESC",
+        "duration_desc": "t.duration_ms DESC NULLS LAST, t.created_at DESC",
     }[sort]
 
     where = " AND ".join(conditions)
@@ -522,22 +530,26 @@ def verdict_unskip_all():
 
 @app.get("/api/tags")
 def list_all_tags():
-    """Distinct EFFECTIVE tags with track counts. Powers filter chips and the
-    autocomplete — hidden/aliased tags are already collapsed out by the view."""
+    """Distinct EFFECTIVE tags with track counts. Powers the facet dropdowns and
+    the autocomplete — hidden/aliased tags are already collapsed out by the view.
+    `layer` = the tag's taxonomy layer when it maps to a profile (family/
+    subgenre/functional/personal), else 'other' (free-text descriptive tags)."""
     conn = get_connection()
     try:
         rows = conn.execute(
-            """SELECT tag,
-                      COUNT(DISTINCT track_pk) AS n,
-                      CASE MIN(type_rank)
+            """SELECT e.tag,
+                      COUNT(DISTINCT e.track_pk) AS n,
+                      CASE MIN(e.type_rank)
                           WHEN 0 THEN 'private_manual'
                           WHEN 1 THEN 'private_model'
                           WHEN 2 THEN 'audio_inferred'
                           WHEN 3 THEN 'context_inferred'
-                          ELSE 'public' END AS tag_type
-               FROM effective_track_tags
-               GROUP BY tag
-               ORDER BY n DESC, tag"""
+                          ELSE 'public' END AS tag_type,
+                      COALESCE(MIN(p.taxonomy_layer), 'other') AS layer
+               FROM effective_track_tags e
+               LEFT JOIN tag_profiles p ON LOWER(p.tag_name) = e.tag
+               GROUP BY e.tag
+               ORDER BY n DESC, e.tag"""
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
