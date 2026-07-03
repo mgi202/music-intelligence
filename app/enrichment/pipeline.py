@@ -85,7 +85,8 @@ def run_pipeline(
             rows = conn.execute("""
                 SELECT t.track_pk, t.canonical_title, t.canonical_artist,
                        t.normalized_title, t.normalized_artist,
-                       t.isrc, t.duration_ms, t.musicbrainz_recording_id
+                       t.isrc, t.duration_ms, t.musicbrainz_recording_id,
+                       t.bandcamp_url
                 FROM tracks t
                 LEFT JOIN enrichment_state es ON es.track_pk = t.track_pk
                 WHERE (t.match_status = 'metadata_only'
@@ -102,7 +103,8 @@ def run_pipeline(
             rows = conn.execute(f"""
                 SELECT track_pk, canonical_title, canonical_artist,
                        normalized_title, normalized_artist,
-                       isrc, duration_ms, musicbrainz_recording_id
+                       isrc, duration_ms, musicbrainz_recording_id,
+                       bandcamp_url
                 FROM tracks
                 WHERE track_pk IN ({','.join('?' * len(track_pks))})
             """, track_pks).fetchall()
@@ -244,6 +246,20 @@ def _enrich_track(track: dict, db_path: str | None) -> str:
         dg_result = discogs.enrich(title, artist, isrc=isrc)
         if dg_result.matched:
             enrichment_flags["has_discogs_data"] = 1
+            # Capture the label + catalogue number (2026-07-03) — this data was
+            # in the response all along and previously discarded. No extra call.
+            if dg_result.label:
+                with db_conn(db_path) as conn:
+                    label_id = _entity_id(dg_result.label, None)
+                    conn.execute(
+                        "INSERT OR IGNORE INTO labels (label_id, name) VALUES (?, ?)",
+                        (label_id, dg_result.label),
+                    )
+                    conn.execute(
+                        "INSERT OR IGNORE INTO track_labels (track_pk, label_id, catalogue_number) "
+                        "VALUES (?, ?, ?)",
+                        (pk, label_id, getattr(dg_result, "catalogue_number", None)),
+                    )
             tag_list = dg_result.genres + dg_result.styles
             if tag_list:
                 enrichment_flags["has_community_tags"] = 1
@@ -261,11 +277,14 @@ def _enrich_track(track: dict, db_path: str | None) -> str:
         _log_event(pk, "discogs", "error", str(e), db_path)
 
     # ── 5. Bandcamp (best-effort) ─────────────────────────────────────────────
-    # Bandcamp has no catalogue API and is not auto-searched at scale. When no
-    # manual URL exists we skip the network call entirely and just record
+    # Bandcamp has no catalogue API and is not auto-searched here. When the
+    # track has no stored URL we skip the network call entirely and just record
     # unavailability on the enrichment_state (flag only — NO per-track
     # processing_event, which would flood the audit log on every pass).
-    bc_url = None  # TODO: hook into manual URL store when available
+    # tracks.bandcamp_url is set manually or by the nightly search sweep
+    # (app.jobs.bandcamp_sweep), so a swept track keeps its Bandcamp tags
+    # through every future re-enrichment.
+    bc_url = track.get("bandcamp_url")
     if bc_url:
         try:
             bc_result = bandcamp.enrich(title, artist, manual_url=bc_url)

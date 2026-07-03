@@ -145,15 +145,21 @@ def test_no_stall_alarm_when_progress(db, monkeypatch):
 
 
 def test_worker_batch_size_env_names(monkeypatch):
-    """ENRICHMENT_BATCH_SIZE is authoritative; legacy ENRICH_BATCH_SIZE falls back."""
+    """ENRICHMENT_BATCH_SIZE is authoritative; legacy ENRICH_BATCH_SIZE falls
+    back. Night passes read their own knob (overnight-jobs build)."""
     from scripts.run_worker import _enrich_batch_size
 
     monkeypatch.delenv("ENRICHMENT_BATCH_SIZE", raising=False)
     monkeypatch.delenv("ENRICH_BATCH_SIZE", raising=False)
-    assert _enrich_batch_size() == 200
+    assert _enrich_batch_size("day") == 200
 
     monkeypatch.setenv("ENRICH_BATCH_SIZE", "300")
-    assert _enrich_batch_size() == 300
+    assert _enrich_batch_size("day") == 300
 
     monkeypatch.setenv("ENRICHMENT_BATCH_SIZE", "1000")
-    assert _enrich_batch_size() == 1000
+    assert _enrich_batch_size("day") == 1000
+
+    monkeypatch.delenv("NIGHT_ENRICHMENT_BATCH_SIZE", raising=False)
+    assert _enrich_batch_size("night") == 2000
+    monkeypatch.setenv("NIGHT_ENRICHMENT_BATCH_SIZE", "3000")
+    assert _enrich_batch_size("night") == 3000

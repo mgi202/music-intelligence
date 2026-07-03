@@ -102,6 +102,26 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tracks ADD COLUMN verdict_skipped_at TEXT")
         print("Migration applied: tracks.verdict_skipped_at")
 
+    # 2026-07-03 (overnight jobs): Bandcamp URL per track — set manually or by
+    # the nightly search sweep; enrichment uses it as the manual_url path.
+    if "bandcamp_url" not in existing:
+        conn.execute("ALTER TABLE tracks ADD COLUMN bandcamp_url TEXT")
+        print("Migration applied: tracks.bandcamp_url")
+
+    # 2026-07-03 (overnight jobs): search-miss stamp for the Bandcamp sweep
+    # (missed tracks are not re-searched for 30 days) + pass_type on metrics
+    # snapshots ('day' | 'night').
+    es_cols = {row["name"] for row in conn.execute("PRAGMA table_info(enrichment_state)")}
+    if es_cols and "bandcamp_search_missed_at" not in es_cols:
+        conn.execute(
+            "ALTER TABLE enrichment_state ADD COLUMN bandcamp_search_missed_at TEXT"
+        )
+        print("Migration applied: enrichment_state.bandcamp_search_missed_at")
+    ms_cols = {row["name"] for row in conn.execute("PRAGMA table_info(metrics_snapshots)")}
+    if ms_cols and "pass_type" not in ms_cols:
+        conn.execute("ALTER TABLE metrics_snapshots ADD COLUMN pass_type TEXT")
+        print("Migration applied: metrics_snapshots.pass_type")
+
     # playlist_rules: sync-safety columns (v3)
     pr_cols = {row["name"] for row in conn.execute("PRAGMA table_info(playlist_rules)")}
     if pr_cols and "last_synced_hash" not in pr_cols:

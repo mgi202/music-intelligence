@@ -20,8 +20,10 @@ _PROCESSING_EVENT_RETENTION_DAYS = 90
 _SNAPSHOT_RETENTION_DAYS = 60
 
 
-def snapshot_metrics(db_path: str | None = None) -> dict:
-    """Compute and persist one metrics_snapshots row. Returns the metrics dict."""
+def snapshot_metrics(db_path: str | None = None, pass_type: str | None = None) -> dict:
+    """Compute and persist one metrics_snapshots row. Returns the metrics dict.
+
+    pass_type ('day' | 'night') records which scheduler pass produced the row."""
     now = datetime.now(timezone.utc).isoformat()
     with db_conn(db_path) as conn:
         def scalar(sql: str) -> int:
@@ -67,6 +69,7 @@ def snapshot_metrics(db_path: str | None = None) -> dict:
             "listens_matched": listens_matched,
             "by_status": by_status,
             "by_source": by_source,
+            "pass_type": pass_type,
         }
 
         conn.execute(
@@ -74,11 +77,11 @@ def snapshot_metrics(db_path: str | None = None) -> dict:
             INSERT OR REPLACE INTO metrics_snapshots
                 (snapshot_at, total_tracks, with_isrc, with_mbid, with_3plus_tags,
                  rated, missing_from_platform, listens_total,
-                 by_status_json, by_source_match_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 by_status_json, by_source_match_json, pass_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (now, total, with_isrc, with_mbid, with_3plus_tags, rated, missing,
-             listens_total, json.dumps(by_status), json.dumps(by_source)),
+             listens_total, json.dumps(by_status), json.dumps(by_source), pass_type),
         )
         return metrics
 
@@ -108,15 +111,26 @@ def prune_playlist_snapshots(
         return cur.rowcount
 
 
-def notify(message: str) -> bool:
-    """Send a one-line push to ntfy.sh if NTFY_TOPIC is set. Returns True if sent."""
+def notify(message: str, title: str | None = None, tags: str | None = None) -> bool:
+    """Send a push to ntfy.sh if NTFY_TOPIC is set. Returns True if sent.
+
+    title/tags map onto ntfy's Title/Tags headers (tags is comma-separated
+    emoji shortcodes, e.g. "warning"). Both optional — plain one-liners from
+    the stage-failure path stay unchanged.
+    """
     topic = os.getenv("NTFY_TOPIC", "")
     if not topic:
         return False
+    headers = {}
+    if title:
+        headers["Title"] = title
+    if tags:
+        headers["Tags"] = tags
     try:
         requests.post(
             f"https://ntfy.sh/{topic}",
             data=message.encode("utf-8"),
+            headers=headers or None,
             timeout=10,
         )
         return True

@@ -6,18 +6,31 @@ One pass runs seven isolated stages (a failure in one never blocks the rest):
   2.  Enrich (TTL-aware metadata pipeline)
   2b. Extended-version discovery (rated set — YTM search + auto-apply/queue)
   3.  Playlist sync (guarded: snapshots, shrink guard, hash short-circuit)
-  4.  Listens import (ListenBrainz + YTM history) — env-gated
-  5.  Metrics snapshot (one row per pass)
-  6.  Prune (processing_events > 90d, playlist_snapshots > 60d)
+  4.  Listens import (ListenBrainz + Last.fm + YTM history) — env-gated
+  5.  Metrics snapshot (one row per pass, stamped with the pass type)
+  6.  Prune (processing_events > 90d, playlist_snapshots > 60d, removal log > 60d)
 
-Any stage failure fires a one-line ntfy.sh push when NTFY_TOPIC is set.
+Night-window scheduler (2026-07-03): the loop is time-of-day aware in
+Europe/London (DST-safe via zoneinfo — the VPS clock is UTC).
+  Inside the window (NIGHT_WINDOW_START_HOUR ≤ h < NIGHT_WINDOW_END_HOUR):
+    night passes at the big batch sizes, back to back with a
+    NIGHT_PASS_GAP_MINUTES rest, plus the once-per-night jobs (app.jobs.*,
+    gated via job_runs): healthcheck+YTM probe, artists/labels backfill,
+    fuzzy dedup scan, DB maintenance (+ Sunday VACUUM), tag-frequency regen,
+    Bandcamp search sweep.
+  Outside: normal day passes; sleep min(WORKER_INTERVAL_MINUTES, minutes
+    until the window starts).
+The first pass finishing at/after DIGEST_HOUR sends the morning digest
+(once per day). Any stage failure fires a one-line ntfy.sh push when
+NTFY_TOPIC is set, and is recorded for the digest.
 
-Interval controlled by WORKER_INTERVAL_MINUTES (default 360 = every 6 hours).
 Safe to kill and restart at any point — every step is idempotent.
 
 Usage:
-    python scripts/run_worker.py            # loop forever
-    python scripts/run_worker.py --once     # single pass, then exit
+    python scripts/run_worker.py               # loop forever
+    python scripts/run_worker.py --once        # single day-type pass, exit
+    python scripts/run_worker.py --once-night  # night pass + nightly jobs +
+                                               # forced digest, exit (testing)
 """
 
 import argparse
@@ -42,23 +55,45 @@ logger = logging.getLogger("worker")
 
 
 def _alert(stage: str, exc: Exception) -> None:
-    """Log a stage failure and push a one-line ntfy alert when configured."""
+    """Log a stage failure, push a one-line ntfy alert when configured, and
+    record it for the morning digest."""
     logger.exception("%s failed", stage)
     try:
         from app.observability import notify
         notify(f"[music-intel] {stage} failed: {exc}")
     except Exception:  # noqa: BLE001 — alerting must never raise
         logger.exception("ntfy alert failed")
+    try:
+        from app.jobs import runs
+        failures = runs.get_detail("stage_failures").get("failures", [])
+        failures.append({"stage": stage,
+                         "at": datetime.now(timezone.utc).isoformat()})
+        runs.merge_detail("stage_failures", {"failures": failures[-100:]})
+    except Exception:  # noqa: BLE001 — bookkeeping must never raise either
+        pass
 
 
-def _enrich_batch_size() -> int:
-    """ENRICHMENT_BATCH_SIZE (the documented knob) with legacy
-    ENRICH_BATCH_SIZE fallback — the worker read only the legacy name before
-    2026-07-02, so .env tuning of the documented name silently did nothing."""
+def _enrich_batch_size(pass_type: str) -> int:
+    """Per-pass enrichment batch. Day: ENRICHMENT_BATCH_SIZE (the documented
+    knob) with legacy ENRICH_BATCH_SIZE fallback — the worker read only the
+    legacy name before 2026-07-02, so .env tuning of the documented name
+    silently did nothing. Night: NIGHT_ENRICHMENT_BATCH_SIZE."""
+    if pass_type == "night":
+        return int(os.getenv("NIGHT_ENRICHMENT_BATCH_SIZE", "2000"))
     return int(os.getenv("ENRICHMENT_BATCH_SIZE") or os.getenv("ENRICH_BATCH_SIZE", "200"))
 
 
-def run_pass() -> None:
+def _version_discovery_batch_size(pass_type: str) -> int:
+    if pass_type == "night":
+        return int(os.getenv("NIGHT_VERSION_DISCOVERY_BATCH_SIZE", "200"))
+    return int(os.getenv("VERSION_DISCOVERY_BATCH_SIZE", "25"))
+
+
+def _flag(name: str, default: str = "1") -> bool:
+    return os.getenv(name, default).strip() not in ("0", "false", "no", "")
+
+
+def run_pass(pass_type: str = "day") -> None:
     """One full six-stage pass. Each stage is isolated."""
     from app.db.init_db import init_db
 
@@ -66,7 +101,6 @@ def run_pass() -> None:
 
     pass_start = datetime.now(timezone.utc).isoformat()
     adapter = None
-    ingest_ok = False
 
     # ── 1. Ingest from YTM + takedown marking ──
     try:
@@ -76,7 +110,6 @@ def run_pass() -> None:
         adapter = YouTubeMusicAdapter()
         tokens = adapter.fetch_library_snapshot()
         inserted, updated = ingest_tokens(tokens)
-        ingest_ok = True
         logger.info("Ingest: %d new, %d updated from YTM", inserted, updated)
 
         # Source-playlist membership (must run AFTER ingest_tokens so videoIds
@@ -106,7 +139,7 @@ def run_pass() -> None:
     try:
         from app.enrichment.pipeline import run_pipeline
 
-        stats = run_pipeline(limit=_enrich_batch_size())
+        stats = run_pipeline(limit=_enrich_batch_size(pass_type))
         logger.info("Enrichment: %s", stats)
     except Exception as e:
         _alert("Enrichment", e)
@@ -119,7 +152,7 @@ def run_pass() -> None:
     try:
         from app.enrichment.version_discovery import run_batch
 
-        vd = run_batch(limit=int(os.getenv("VERSION_DISCOVERY_BATCH_SIZE", "25")))
+        vd = run_batch(limit=_version_discovery_batch_size(pass_type))
         logger.info(
             "Version discovery: %d scanned, %d auto-applied, %d pending, %d discarded",
             vd["scanned"], vd["auto_applied"], vd["pending"], vd["discarded"],
@@ -196,7 +229,7 @@ def run_pass() -> None:
     try:
         from app.observability import snapshot_metrics
 
-        m = snapshot_metrics()
+        m = snapshot_metrics(pass_type=pass_type)
         logger.info(
             "Metrics: %d tracks, %d rated, %d listens (%d matched), %d missing",
             m["total_tracks"], m["rated"], m["listens_total"],
@@ -221,20 +254,174 @@ def run_pass() -> None:
         _alert("Prune", e)
 
 
+def _record_job(name: str, night_date: str, status: str, result: dict) -> None:
+    """Store a job's result in job_runs.detail['result'] without clobbering
+    cursors the job itself keeps in other detail keys."""
+    from app.jobs import runs
+
+    detail = runs.get_detail(name)
+    detail["result"] = result
+    runs.record_run(name, night_date, status, detail)
+
+
+def run_night_jobs(night_date: str) -> None:
+    """The once-per-night jobs, each gated via job_runs and fully isolated."""
+    from app.jobs import runs
+
+    # Job 7 — healthcheck + YTM auth probe (start of window).
+    if runs.should_run("health_probe", night_date):
+        try:
+            from app.jobs.health_probe import run_probe
+            result = run_probe()
+            ok = result.get("healthcheck") == 0 and result.get("ytm_auth") == "ok"
+            _record_job("health_probe", night_date, "ok" if ok else "warn", result)
+            logger.info("Night job health_probe: %s", result)
+        except Exception as e:
+            _alert("Night job: health_probe", e)
+            _record_job("health_probe", night_date, "error", {"error": str(e)})
+
+    # Job 3 — artists & labels backfill (CPU-only, incremental).
+    if runs.should_run("artists_labels_backfill", night_date):
+        try:
+            from app.jobs.artists_labels import run_backfill
+            result = run_backfill()
+            _record_job("artists_labels_backfill", night_date, "ok", result)
+            logger.info("Night job artists_labels_backfill: %s", result)
+        except Exception as e:
+            _alert("Night job: artists_labels_backfill", e)
+            _record_job("artists_labels_backfill", night_date, "error", {"error": str(e)})
+
+    # Job 4 — fuzzy dedup scan (review-only, never auto-merge).
+    if _flag("DEDUP_SCAN_NIGHTLY") and runs.should_run("dedup_scan", night_date):
+        try:
+            from app.jobs.dedup_scan import run_scan
+            result = run_scan()
+            _record_job("dedup_scan", night_date, "ok", result)
+            logger.info("Night job dedup_scan: %s", result)
+        except Exception as e:
+            _alert("Night job: dedup_scan", e)
+            _record_job("dedup_scan", night_date, "error", {"error": str(e)})
+
+    # Job 8 — tag-frequency report regen (temporary, until vocab lock).
+    if _flag("TAG_FREQ_NIGHTLY") and runs.should_run("tag_frequency", night_date):
+        try:
+            from app.jobs.tag_frequency import run_report
+            result = run_report()
+            _record_job("tag_frequency", night_date, "ok", result)
+            logger.info("Night job tag_frequency: %s", result)
+        except Exception as e:
+            _alert("Night job: tag_frequency", e)
+            _record_job("tag_frequency", night_date, "error", {"error": str(e)})
+
+    # Job 9 — Bandcamp search sweep (capped, polite, degrade-and-stop).
+    if _flag("BANDCAMP_SWEEP_NIGHTLY") and runs.should_run("bandcamp_sweep", night_date):
+        try:
+            from app.jobs.bandcamp_sweep import run_sweep
+            result = run_sweep()
+            status = "degraded" if result.get("degraded") else "ok"
+            _record_job("bandcamp_sweep", night_date, status, result)
+            logger.info("Night job bandcamp_sweep: %s", result)
+        except Exception as e:
+            _alert("Night job: bandcamp_sweep", e)
+            _record_job("bandcamp_sweep", night_date, "error", {"error": str(e)})
+
+    # Job 5 — DB maintenance (quick_check + ANALYZE; VACUUM on VACUUM_WEEKDAY).
+    if _flag("DB_MAINTENANCE_NIGHTLY") and runs.should_run("db_maintenance", night_date):
+        try:
+            from datetime import date
+            from app.jobs.db_maintenance import nightly_check, weekly_vacuum
+            result = nightly_check()
+            vacuum_weekday = int(os.getenv("VACUUM_WEEKDAY", "6"))
+            if date.fromisoformat(night_date).weekday() == vacuum_weekday:
+                result.update(weekly_vacuum())
+            _record_job("db_maintenance", night_date,
+                        "ok" if result.get("ok") else "warn", result)
+            logger.info("Night job db_maintenance: %s", result)
+        except Exception as e:
+            _alert("Night job: db_maintenance", e)
+            _record_job("db_maintenance", night_date, "error", {"error": str(e)})
+
+
+def maybe_send_digest(now_utc: datetime, force: bool = False) -> bool:
+    """Send the morning digest if this pass is the first to end at/after
+    DIGEST_HOUR (London) today. force bypasses the hour gate (--once-night)."""
+    from app.jobs import digest, night, runs
+
+    night_date = night.london_date(now_utc)
+    digest_hour = int(os.getenv("DIGEST_HOUR", "7"))
+    if not force and night.to_london(now_utc).hour < digest_hour:
+        return False
+    if not runs.should_run(digest.JOB_NAME, night_date):
+        return False
+    sent = digest.send(now_utc=now_utc)
+    runs.record_run(digest.JOB_NAME, night_date, "sent" if sent else "send_failed",
+                    {"result": {"sent": sent, "forced": force}})
+    logger.info("Morning digest %s", "sent" if sent else "NOT sent (ntfy disabled/failed?)")
+    return sent
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--once", action="store_true", help="Run one pass and exit")
+    parser.add_argument("--once", action="store_true",
+                        help="Run one day-type pass and exit")
+    parser.add_argument("--once-night", action="store_true",
+                        help="Run one night pass + nightly jobs + forced digest, then exit")
     args = parser.parse_args()
 
-    interval = int(os.getenv("WORKER_INTERVAL_MINUTES", "360")) * 60
+    from app.jobs import night, runs
+
+    # Schema first: the night branch reads job_runs before run_pass gets a
+    # chance to init_db (idempotent — run_pass re-runs it every pass anyway).
+    from app.db.init_db import init_db
+    init_db()
+
+    day_interval_min = int(os.getenv("WORKER_INTERVAL_MINUTES", "360"))
+    night_gap_min = int(os.getenv("NIGHT_PASS_GAP_MINUTES", "5"))
+
+    if args.once:
+        logger.info("Worker pass starting (day, --once)")
+        run_pass("day")
+        maybe_send_digest(datetime.now(timezone.utc))
+        logger.info("Worker pass complete")
+        return
+
+    if args.once_night:
+        now = datetime.now(timezone.utc)
+        night_date = night.london_date(now)
+        logger.info("Worker pass starting (night, --once-night)")
+        run_night_jobs(night_date)
+        run_pass("night")
+        maybe_send_digest(datetime.now(timezone.utc), force=True)
+        logger.info("Worker pass complete")
+        return
 
     while True:
-        logger.info("Worker pass starting")
-        run_pass()
-        logger.info("Worker pass complete")
-        if args.once:
-            break
-        time.sleep(interval)
+        now = datetime.now(timezone.utc)
+        if night.in_window(now):
+            night_date = night.london_date(now)
+            # First pass of tonight: mark the window start for the digest.
+            try:
+                if runs.should_run("night_window", night_date):
+                    runs.record_run("night_window", night_date, "ok",
+                                    {"window_start": now.isoformat()})
+            except Exception:  # noqa: BLE001 — marker is best-effort
+                logger.exception("night_window marker failed")
+            logger.info("Worker pass starting (night)")
+            run_night_jobs(night_date)
+            run_pass("night")
+            maybe_send_digest(datetime.now(timezone.utc))
+            logger.info("Worker pass complete (night); resting %d min", night_gap_min)
+            time.sleep(night_gap_min * 60)
+        else:
+            logger.info("Worker pass starting (day)")
+            run_pass("day")
+            maybe_send_digest(datetime.now(timezone.utc))
+            wait_min = min(
+                float(day_interval_min),
+                night.minutes_until_window_start(datetime.now(timezone.utc)),
+            )
+            logger.info("Worker pass complete (day); sleeping %.0f min", wait_min)
+            time.sleep(max(60.0, wait_min * 60))
 
 
 if __name__ == "__main__":

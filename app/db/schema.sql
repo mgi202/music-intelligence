@@ -50,6 +50,10 @@ CREATE TABLE IF NOT EXISTS tracks (
     -- Verdict Queue (2026-07-02): set when Matthias skips a track in the rapid
     -- tagging tab, so the queue never re-serves it. NULL = eligible.
     verdict_skipped_at          TEXT,
+    -- Bandcamp page URL for this track/release (2026-07-03). Set manually or by
+    -- the nightly search sweep; when present, enrichment uses it as the
+    -- manual_url path so Bandcamp tags survive re-enrichment.
+    bandcamp_url                TEXT,
     created_at                  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at                  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (match_status IN (
@@ -266,6 +270,9 @@ CREATE TABLE IF NOT EXISTS enrichment_state (
     has_knn_tags                INTEGER DEFAULT 0,
     bandcamp_unavailable        INTEGER DEFAULT 0,
     bandcamp_checked_at         TEXT,
+    -- Nightly Bandcamp search sweep (2026-07-03): stamped when a search found
+    -- no acceptable match. A missed track is not searched again for 30 days.
+    bandcamp_search_missed_at   TEXT,
     metadata_confidence         REAL DEFAULT 0.0,
     audio_source_confidence     REAL DEFAULT 0.0,
     enrichment_tier             TEXT NOT NULL DEFAULT 'metadata_only' CHECK (enrichment_tier IN (
@@ -482,7 +489,24 @@ CREATE TABLE IF NOT EXISTS metrics_snapshots (
     total_tracks       INTEGER, with_isrc INTEGER, with_mbid INTEGER,
     with_3plus_tags    INTEGER, rated INTEGER, missing_from_platform INTEGER,
     listens_total      INTEGER,
-    by_status_json     TEXT, by_source_match_json TEXT
+    by_status_json     TEXT, by_source_match_json TEXT,
+    -- Night-window scheduler (2026-07-03): 'day' | 'night' — which pass type
+    -- produced this snapshot. NULL on rows written before the scheduler.
+    pass_type          TEXT
+);
+
+-- ─────────────────────────────────────────
+-- Nightly/weekly job bookkeeping (2026-07-03, overnight-jobs build).
+-- One row per job. last_run_date is the Europe/London calendar date of the
+-- last run — the once-per-night gate. detail carries per-job JSON state
+-- (cursors, window-start markers, last results for the digest).
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS job_runs (
+    job_name       TEXT PRIMARY KEY,
+    last_run_date  TEXT,
+    last_status    TEXT,
+    detail         TEXT,
+    updated_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ─────────────────────────────────────────
