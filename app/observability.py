@@ -111,6 +111,19 @@ def prune_playlist_snapshots(
         return cur.rowcount
 
 
+def _header_value(value: str) -> str:
+    """HTTP headers are latin-1; a title like "Music Intel — overnight" (em
+    dash, U+2014) makes requests raise UnicodeEncodeError and the push is
+    silently swallowed. ntfy supports RFC 2047 encoded words, so non-latin-1
+    values are sent as =?UTF-8?B?...?= instead."""
+    try:
+        value.encode("latin-1")
+        return value
+    except UnicodeEncodeError:
+        import base64
+        return "=?UTF-8?B?" + base64.b64encode(value.encode("utf-8")).decode("ascii") + "?="
+
+
 def notify(message: str, title: str | None = None, tags: str | None = None) -> bool:
     """Send a push to ntfy.sh if NTFY_TOPIC is set. Returns True if sent.
 
@@ -123,9 +136,9 @@ def notify(message: str, title: str | None = None, tags: str | None = None) -> b
         return False
     headers = {}
     if title:
-        headers["Title"] = title
+        headers["Title"] = _header_value(title)
     if tags:
-        headers["Tags"] = tags
+        headers["Tags"] = _header_value(tags)
     try:
         requests.post(
             f"https://ntfy.sh/{topic}",

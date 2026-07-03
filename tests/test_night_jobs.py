@@ -462,3 +462,26 @@ class TestDigestGating:
         worker.maybe_send_digest(utc(2026, 7, 4, 3, 0), force=True)
         run = runs.get_run("morning_digest", db)
         assert run is not None and run["detail"]["result"]["forced"] is True
+
+
+# ── notify() header safety: non-latin-1 titles must not kill the push ───────
+
+def test_notify_encodes_non_latin1_headers(monkeypatch):
+    from app import observability
+    sent = {}
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        # requests raises UnicodeEncodeError on non-latin-1 header values —
+        # reproduce that contract so a regression fails the test.
+        for v in (headers or {}).values():
+            v.encode("latin-1")
+        sent["headers"] = headers
+        class R: pass
+        return R()
+
+    monkeypatch.setenv("NTFY_TOPIC", "test-topic")
+    monkeypatch.setattr(observability.requests, "post", fake_post)
+    assert observability.notify("body", title="Music Intel — overnight",
+                                tags="white_check_mark") is True
+    assert sent["headers"]["Title"].startswith("=?UTF-8?B?")   # RFC 2047
+    assert sent["headers"]["Tags"] == "white_check_mark"       # ascii untouched
