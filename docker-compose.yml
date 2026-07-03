@@ -37,7 +37,9 @@ services:
     environment:
       - SQLITE_PATH=/data/library.db
       - YTM_OAUTH_FILE=/config/oauth.json
-      - WORKER_INTERVAL_MINUTES=360
+      # Interpolated from .env at compose time (falls back to 360). A literal
+      # value here would override env_file and make .env edits silently no-ops.
+      - WORKER_INTERVAL_MINUTES=${WORKER_INTERVAL_MINUTES:-360}
     volumes:
       - mis-data:/data
       - ./oauth.json:/config/oauth.json
