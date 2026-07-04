@@ -271,6 +271,28 @@ class YouTubeMusicAdapter(StreamingPlatformAdapter):
             return {}
         return self.client.add_playlist_items(playlist_id, video_ids)
 
+    # ── Official-video counterpart (prefer-videos toggle, 2026-07-04) ─────────
+
+    def get_official_video_counterpart(self, video_id: str) -> str | None:
+        """YTM's own Song↔Video toggle pairing for a track, if any.
+
+        get_watch_playlist surfaces the audio↔video switch as a `counterpart`
+        on the first track. We only return a counterpart when the BASE track is
+        an audio-type stream (ATV) — if the base is already a real video there
+        is nothing to upgrade. Returns the counterpart videoId or None.
+        """
+        wp = self.client.get_watch_playlist(videoId=video_id, limit=1)
+        tracks = wp.get("tracks") or []
+        if not tracks:
+            return None
+        base = tracks[0]
+        counterpart = base.get("counterpart") or {}
+        cp_id = counterpart.get("videoId")
+        base_type = base.get("videoType") or ""
+        if cp_id and cp_id != video_id and base_type.endswith("_ATV"):
+            return cp_id
+        return None
+
     # ── Playlist write ────────────────────────────────────────────────────────
 
     def write_playlist(

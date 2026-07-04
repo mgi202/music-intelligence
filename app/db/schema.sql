@@ -47,6 +47,12 @@ CREATE TABLE IF NOT EXISTS tracks (
     -- player plays THIS id instead of ytm_track_id. Playback-by-id is not swapped,
     -- only playlist membership is — so this is how extended cuts get heard.
     playback_video_id           TEXT,
+    -- Official-video counterpart (2026-07-04): YTM's own Song↔Video pairing
+    -- for audio-only tracks, resolved lazily at play time. Used ONLY when the
+    -- "prefer videos" toggle is on; never overrides a pinned playback version.
+    -- checked_at records the lookup so each track is queried at most once.
+    official_video_id           TEXT,
+    official_video_checked_at   TEXT,
     -- Verdict Queue (2026-07-02): set when Matthias skips a track in the rapid
     -- tagging tab, so the queue never re-serves it. NULL = eligible.
     verdict_skipped_at          TEXT,
@@ -628,6 +634,16 @@ CREATE TABLE IF NOT EXISTS play_queue (
     track_pk  TEXT NOT NULL,
     added_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (track_pk) REFERENCES tracks(track_pk) ON DELETE CASCADE
+);
+
+-- Which YTM playlist mirrors the queue (save ⇗). Single row. NB: YTM may
+-- server-swap extended versions to audio inside native playlists — the
+-- in-app queue keeps the pinned versions; the mirror is best-effort.
+CREATE TABLE IF NOT EXISTS queue_mirror (
+    id            INTEGER PRIMARY KEY CHECK (id = 1),
+    playlist_id   TEXT NOT NULL,
+    playlist_name TEXT NOT NULL,
+    updated_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ─────────────────────────────────────────

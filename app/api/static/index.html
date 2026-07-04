@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0d0d11">
 <title>Music Intelligence</title>
+<!-- Outline icon set (silhouette style per the locked Home design). Degrades
+     gracefully offline: icons vanish, labels remain. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css">
 <style>
   :root {
     --bg: #0d0d11; --panel: #16161d; --panel2: #1e1e28;
@@ -12,7 +15,7 @@
     --accent-dim: #87ab00; --danger: #ff5470; --radius: 10px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-  body { background: var(--bg); color: var(--text); font-family: -apple-system, "Segoe UI", Roboto, sans-serif; padding-bottom: 140px; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, "Segoe UI", Roboto, sans-serif; padding-bottom: 40px; }
 
   header { position: sticky; top: 0; z-index: 20; background: rgba(13,13,17,.96); backdrop-filter: blur(8px); padding: 12px 14px 8px; border-bottom: 1px solid #23232e; }
   header h1 { font-size: 15px; letter-spacing: 2px; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
@@ -54,10 +57,10 @@
   .clearall { background: none; border: none; color: var(--accent); font-size: 12px; cursor: pointer; flex-shrink: 0; }
   .modebtn2 { background: var(--panel2); border: 1px solid var(--accent-dim); color: var(--accent); border-radius: 999px; padding: 1px 9px; font-size: 10.5px; font-weight: 700; cursor: pointer; letter-spacing: 1px; }
 
-  nav.tabs { display: flex; gap: 4px; margin-top: 8px; align-items: center; }
-  nav.tabs button { flex: 1; background: none; border: none; color: var(--dim); padding: 8px; font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent; }
+  nav.tabs { display: flex; gap: 14px; margin-top: 8px; align-items: center; }
+  nav.tabs button { flex: 0 0 auto; background: none; border: none; color: var(--dim); padding: 8px 2px; font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent; }
   nav.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
-  #homesearch { margin-left: 8px; background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 5px 10px; border-radius: 8px; font-size: 12px; outline: none; width: 190px; flex: 0 0 auto; }
+  #homesearch { margin-left: auto; background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 7px 12px; border-radius: 8px; font-size: 12px; outline: none; width: 280px; flex: 0 0 auto; }
   #homesearch:focus { border-color: var(--accent-dim); }
 
   main { padding: 10px 14px; }
@@ -102,43 +105,41 @@
   .pl .actions button.danger { color: var(--danger); }
   .newpl { width: 100%; padding: 12px; border: 1px dashed #3a3a48; background: none; color: var(--dim); border-radius: var(--radius); cursor: pointer; font-size: 14px; margin-bottom: 10px; }
 
-  /* Player — ONE component, two modes. hero-mode: in-flow at the very top of
-     the page (Home). bar-mode: fixed to the bottom (all other tabs). Same DOM
-     node in both — the YT iframe must never be reparented or it reloads and
-     playback stops; only classes change. */
-  #playerbar { display: none; }
-  #playerbar.visible { display: block; }
-  #playerbar.bar-mode { position: fixed; bottom: 0; left: 0; right: 0; background: var(--panel); border-top: 1px solid #23232e; padding: 8px 14px; z-index: 30; }
-  #playerbar.hero-mode { position: static; background: var(--panel); border-bottom: 1px solid #23232e; padding: 12px 14px; }
-  .pb-grid { display: flex; gap: 12px; align-items: center; }
-  #pb-art { width: 84px; height: 84px; border-radius: 6px; object-fit: cover; background: #000; flex-shrink: 0; display: none; }
-  #playerbar.hero-mode #pb-art { display: block; }
-  .pb-lbl { display: none; font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); margin-bottom: 3px; }
-  #playerbar.hero-mode .pb-lbl { display: block; }
+  /* App title strip — always the very first thing on the page. */
+  #apptitle { padding: 12px 14px 0; }
+  #apptitle h1 { font-size: 15px; letter-spacing: 2px; text-transform: uppercase; color: var(--accent); }
+  #apptitle h1 span { color: var(--dim); font-weight: 400; }
+
+  /* Player hero — Home only. On every other tab the player is fully hidden
+     but the YT iframe keeps playing (display toggling never reparents it,
+     which would reload the video and stop audio). */
+  #playerbar { display: none; background: var(--panel); border-bottom: 1px solid #23232e; padding: 12px 14px; }
+  #playerbar.visible.hero-mode { display: block; }
+  .pb-grid { display: flex; gap: 14px; align-items: center; }
+  #pb-art { width: 88px; height: 88px; border-radius: 6px; object-fit: cover; background: #000; flex-shrink: 0; }
+  .pb-lbl { font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); margin-bottom: 3px; }
   #playerbar .nowplaying { font-size: 12px; color: var(--dim); display: flex; justify-content: space-between; gap: 8px; }
   #playerbar .nowplaying b { color: var(--text); font-size: 13px; }
   #playerbar .closebtn { background: none; border: none; color: var(--dim); cursor: pointer; font-size: 14px; }
-  #ytplayer-wrap { position: relative; width: 120px; height: 68px; flex-shrink: 0; border-radius: 6px; overflow: hidden; background: #000; }
-  #playerbar.hero-mode #ytplayer-wrap { width: 214px; height: 120px; }
+  #ytplayer-wrap { position: relative; width: 280px; height: 158px; flex-shrink: 0; border-radius: 6px; overflow: hidden; background: #000; }
   #ytplayer, #ytplayer-wrap iframe { width: 100%; height: 100%; border: 0; }
-  #pb-expand { display: none; position: absolute; top: 4px; right: 4px; z-index: 2; background: rgba(0,0,0,.55); border: none; color: #fff; border-radius: 6px; cursor: pointer; font-size: 13px; padding: 2px 7px; }
-  #playerbar.hero-mode #pb-expand { display: block; }
+  #pb-expand { position: absolute; top: 4px; right: 4px; z-index: 2; background: rgba(0,0,0,.55); border: none; color: #fff; border-radius: 6px; cursor: pointer; font-size: 13px; padding: 2px 7px; }
   .pb-main { flex: 1; min-width: 0; }
   .pb-controls { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
-  .pb-controls button { background: none; border: none; color: var(--text); font-size: 16px; cursor: pointer; padding: 2px 4px; line-height: 1; }
-  .pb-controls button:hover { color: var(--accent); }
-  #pb-stars { display: none; }
-  #playerbar.hero-mode #pb-stars { display: block; }
+  .pb-controls button { background: none; border: none; color: var(--accent); font-size: 16px; cursor: pointer; padding: 2px 4px; line-height: 1; }
+  .pb-controls button:hover { color: var(--text); }
+  .pb-bottom { display: flex; margin-top: 8px; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .vidpref { background: none; border: 1px solid #2b2b38; color: var(--dim); border-radius: 10px; padding: 2px 9px; font-size: 11px; cursor: pointer; }
+  .vidpref.on { color: var(--accent); border-color: var(--accent-dim); }
   #pb-stars .stars button { font-size: 15px; padding: 0 1px; }
-  .pb-tags { display: none; margin-top: 8px; gap: 6px; flex-wrap: wrap; align-items: center; }
-  #playerbar.hero-mode .pb-tags { display: flex; }
   .pb-time { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; min-width: 34px; text-align: center; }
   .pb-track { flex: 1; height: 6px; background: var(--panel2); border-radius: 999px; cursor: pointer; overflow: hidden; }
   .pb-fill { height: 100%; width: 0; background: var(--accent); border-radius: 999px; }
   .track.playing { box-shadow: inset 3px 0 0 var(--accent); }
 
-  /* Home hub: three panes (tree / table / queue) */
-  #home { display: grid; grid-template-columns: 200px minmax(0,1fr) 230px; gap: 12px; align-items: start; }
+  /* Home hub: three panes. Both rails fixed at 180px — the track table is
+     always the widest panel (locked v9 decision). */
+  #home { display: grid; grid-template-columns: 180px minmax(0,1fr) 180px; gap: 12px; align-items: start; }
   #remotestrip { grid-column: 1 / -1; display: none; align-items: center; gap: 10px; background: var(--panel); border: 1px solid #23232e; border-radius: var(--radius); padding: 8px 12px; font-size: 12.5px; }
   #remotestrip.on { display: flex; }
   #remotestrip .stars button { font-size: 15px; padding: 0 1px; }
@@ -163,8 +164,11 @@
   .midrow .a { color: var(--dim); }
   .midrow.playing { box-shadow: inset 3px 0 0 var(--accent); }
   .midrow .stars button { font-size: 14px; padding: 1px; }
-  .midrow .qadd { background: none; border: none; color: var(--dim); cursor: pointer; font-size: 15px; line-height: 1; }
-  .midrow .qadd:hover { color: var(--accent); }
+  .midrow .mic { background: none; border: none; color: var(--dim); cursor: pointer; font-size: 15px; line-height: 1; padding: 2px; }
+  .midrow .mic:hover { color: var(--accent); }
+  .midrow .playbtn { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 13px; line-height: 1; padding: 2px; }
+  .midrow .playbtn:disabled { color: #3a3a48; cursor: default; }
+  .treeitem .ti { font-size: 12px; }
   .qhead { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
   .qhead .lbl { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); }
   .qhead button { background: none; border: none; color: var(--dim); font-size: 11px; cursor: pointer; }
@@ -426,37 +430,40 @@
 </head>
 <body>
 
-<!-- Player: hero-mode on Home (in flow, very top), bar-mode elsewhere (fixed
-     bottom). One DOM node — never reparent it, the YT iframe would reload. -->
-<div id="playerbar" class="bar-mode">
+<div id="apptitle"><h1>Music Intelligence <span id="trackcount"></span></h1></div>
+
+<!-- Player hero: Home only (hidden but still audible on other tabs). One DOM
+     node — never reparent it, the YT iframe would reload and stop playback. -->
+<div id="playerbar" class="hero-mode">
   <div class="pb-grid">
     <img id="pb-art" alt="" />
     <div class="pb-main">
       <div class="pb-lbl">Currently playing</div>
       <div class="nowplaying">
         <span id="np"></span>
-        <span style="flex-shrink:0">
-          <a id="np-ytm" href="#" target="_blank" style="color:var(--accent);font-size:12px;text-decoration:none;margin-right:12px">Open in YTM ↗</a>
-          <button class="closebtn" onclick="closePlayer()">✕</button>
-        </span>
+        <button class="closebtn" onclick="closePlayer()" title="Stop and close player">✕</button>
       </div>
       <div class="pb-controls">
-        <button id="pb-prev" onclick="prevTrack()" title="Previous">⏮</button>
-        <button id="pb-play" onclick="togglePlay()" title="Play / pause">▶</button>
-        <button id="pb-next" onclick="nextTrack()" title="Next">⏭</button>
+        <button id="pb-prev" onclick="prevTrack()" title="Previous"><i class="ti ti-player-skip-back"></i></button>
+        <button id="pb-play" onclick="togglePlay()" title="Play / pause"><i class="ti ti-player-play"></i></button>
+        <button id="pb-next" onclick="nextTrack()" title="Next"><i class="ti ti-player-skip-forward"></i></button>
         <span id="pb-cur" class="pb-time">0:00</span>
         <div id="pb-track" class="pb-track"><div id="pb-fill" class="pb-fill"></div></div>
         <span id="pb-dur" class="pb-time">0:00</span>
-        <span id="pb-stars"></span>
       </div>
-      <div class="pb-tags" id="pb-tags"></div>
+      <div class="pb-bottom">
+        <span id="pb-stars"></span>
+        <span id="pb-tags" style="display:contents"></span>
+        <button id="pb-vidpref" class="vidpref" onclick="toggleVidPref()"
+          title="Prefer official videos: when on, audio-only tracks play their official music video where YTM has one. Pinned extended versions always win. Video edits can differ from the album audio."><i class="ti ti-video"></i> videos</button>
+        <a id="np-ytm" href="#" target="_blank" style="color:var(--accent);font-size:11px;text-decoration:none">open in YTM <i class="ti ti-external-link" style="font-size:10px"></i></a>
+      </div>
     </div>
-    <div id="ytplayer-wrap"><div id="ytplayer"></div><button id="pb-expand" onclick="expandVideo()" title="Full screen">⛶</button></div>
+    <div id="ytplayer-wrap"><div id="ytplayer"></div><button id="pb-expand" onclick="expandVideo()" title="Full screen"><i class="ti ti-arrows-maximize"></i></button></div>
   </div>
 </div>
 
 <header>
-  <h1>Music Intelligence <span id="trackcount"></span></h1>
   <div class="searchrow">
     <input id="search" type="search" placeholder="Search title, artist, album, tag…" autocomplete="off">
     <button class="refreshbtn" id="refreshbtn" title="Reload — fetch the latest app + data" onclick="location.reload()">⟳</button>
@@ -493,9 +500,10 @@
       <div id="mid-rows"></div>
     </div>
     <div class="pane-right">
-      <div class="qhead"><span class="lbl">Queue <span id="q-meta"></span></span><button onclick="clearQueue()">clear</button></div>
+      <div class="qhead"><span class="lbl">Queue <span id="q-meta"></span></span>
+        <span><button onclick="clearQueue()">clear</button> <button onclick="queueSave()" title="Mirror the queue to a YTM playlist. Heads-up: YTM may swap extended versions to the audio version inside native playlists.">save <i class="ti ti-arrow-up-right"></i></button></span></div>
       <div id="q-rows"></div>
-      <div class="qdrop">play a list or tap ⊕ on any track — the queue persists as your set crate</div>
+      <div class="qdrop"><i class="ti ti-circle-plus"></i> from any track lands here — persists as your set crate</div>
     </div>
   </div>
   <div id="library" style="display:none"></div>
@@ -517,7 +525,8 @@ const state = {
   matchesSub: "duplicates", reviewPairs: [], view: "home",
   // Home hub state
   plTree: [], treeExpanded: false, homeNode: null, homeTracks: [],
-  midTitle: "", midSub: "", pq: [],
+  midTitle: "", midSub: "", pq: [], qMirror: null,
+  preferVideos: localStorage.getItem("preferVideos") === "1", ovCache: {},
   isMobile: /Android|iPhone|iPad/i.test(navigator.userAgent),
   queue: [], qIndex: -1,
   // Review queue (merged Inbox + Verdict surface)
@@ -968,16 +977,17 @@ async function rejectTag(pk, tag) {
 // Desktop: a real queue player via the YouTube IFrame API (continuous play,
 // auto-advance, transport controls, seek). Mobile: deep-link out (a web player
 // can't background-play on Android — that wall is tracked separately).
-let ytPlayer = null, ytReady = false, pendingPlay = null, progTimer = null;
+let ytPlayer = null, ytReady = false, pendingPlay = null, pendingCue = null, progTimer = null, progTick = 0;
 
 function onYouTubeIframeAPIReady() {
   ytPlayer = new YT.Player("ytplayer", {
-    height: "68", width: "120",
+    height: "158", width: "280",
     playerVars: { playsinline: 1, rel: 0 },
     events: {
       onReady: () => {
         ytReady = true;
         if (pendingPlay) { const p = pendingPlay; pendingPlay = null; loadQ(p.index); }
+        else if (pendingCue) doCue();
       },
       onStateChange: onPlayerState,
     },
@@ -987,8 +997,57 @@ function onYouTubeIframeAPIReady() {
 function onPlayerState(e) {
   if (e.data === YT.PlayerState.ENDED) { nextTrack(); return; }
   const btn = $("pb-play");
-  if (e.data === YT.PlayerState.PLAYING) { btn.textContent = "⏸"; startProg(); }
-  else if (e.data === YT.PlayerState.PAUSED) { btn.textContent = "▶"; }
+  if (e.data === YT.PlayerState.PLAYING) { btn.innerHTML = '<i class="ti ti-player-pause"></i>'; startProg(); }
+  else if (e.data === YT.PlayerState.PAUSED) { btn.innerHTML = '<i class="ti ti-player-play"></i>'; }
+  else if (e.data === YT.PlayerState.CUED) {
+    // Restored-after-refresh state: show the saved position, wait for a tap.
+    btn.innerHTML = '<i class="ti ti-player-play"></i>';
+    try {
+      const d = ytPlayer.getDuration() || 0, c = ytPlayer.getCurrentTime() || 0;
+      $("pb-cur").textContent = fmtTime(c); $("pb-dur").textContent = fmtTime(d);
+      $("pb-fill").style.width = d ? `${(c / d) * 100}%` : "0";
+    } catch (err) {}
+  }
+}
+
+// ── Refresh persistence: the hero survives a page reload, paused at the
+//    saved position (browsers block un-gestured audio autoplay). ──
+function savePlayerState(pos) {
+  try {
+    if (!(state.queue || []).length || state.qIndex < 0) {
+      localStorage.removeItem("playerState"); return;
+    }
+    localStorage.setItem("playerState", JSON.stringify({
+      queue: state.queue, qIndex: state.qIndex, pos: pos || 0,
+    }));
+  } catch (e) {}
+}
+
+function restorePlayer() {
+  if (state.isMobile) return;
+  let s;
+  try { s = JSON.parse(localStorage.getItem("playerState") || "null"); }
+  catch (e) { return; }
+  if (!s || !(s.queue || []).length) return;
+  state.queue = s.queue;
+  state.qIndex = Math.min(Math.max(s.qIndex, 0), s.queue.length - 1);
+  const item = state.queue[state.qIndex];
+  const vid = item.playingId || item.videoId;   // keep the video/audio choice made pre-refresh
+  $("playerbar").classList.add("visible");
+  $("np").innerHTML = `<b>${esc(item.label)}</b>` +
+    (item.ext ? ' <span style="color:var(--accent);font-size:11px">· extended</span>'
+     : vid !== item.videoId ? ' <span style="color:var(--accent);font-size:11px">· video</span>' : "");
+  $("np-ytm").href = `https://music.youtube.com/watch?v=${vid}`;
+  $("pb-art").src = `https://i.ytimg.com/vi/${vid}/mqdefault.jpg`;
+  updateHeroMeta(item.pk);
+  pendingCue = { videoId: vid, start: s.pos || 0 };
+  if (ytReady) doCue();
+}
+
+function doCue() {
+  if (!pendingCue || !ytReady) return;
+  ytPlayer.cueVideoById({ videoId: pendingCue.videoId, startSeconds: pendingCue.start });
+  pendingCue = null;
 }
 
 // Tracks visible in the current view, in display order — that's the queue.
@@ -1033,20 +1092,54 @@ function _startQueue(queue, index) {
   loadQ(index);
 }
 
-function loadQ(i) {
+// Prefer-videos toggle: play-time priority is pinned extended > official
+// video (toggle on) > audio. Counterparts resolve lazily server-side, one
+// YTM lookup per track ever; results cached here per session too.
+function toggleVidPref() {
+  state.preferVideos = !state.preferVideos;
+  localStorage.setItem("preferVideos", state.preferVideos ? "1" : "0");
+  $("pb-vidpref").classList.toggle("on", state.preferVideos);
+  toast(state.preferVideos
+    ? "Official videos on — applies from the next track"
+    : "Back to pure audio from the next track");
+}
+
+async function resolveOfficial(pk) {
+  if (!pk) return null;
+  if (pk in state.ovCache) return state.ovCache[pk];
+  try {
+    const d = await api(`/api/tracks/${pk}/official-video`);
+    state.ovCache[pk] = d.official_video_id || null;
+  } catch (e) { return null; }   // transient — don't cache, retry next play
+  return state.ovCache[pk];
+}
+
+async function loadQ(i) {
   if (i < 0 || i >= state.queue.length) return;
   state.qIndex = i;
   const item = state.queue[i];
-  ytPlayer.loadVideoById(item.videoId);
+  let vid = item.videoId;
+  if (state.preferVideos && !item.ext) {
+    const ov = await resolveOfficial(item.pk);
+    if (state.queue[state.qIndex] !== item) return;   // user skipped mid-lookup
+    if (ov) vid = ov;
+  }
+  item.playingId = vid;
+  ytPlayer.loadVideoById(vid);
   $("np").innerHTML = `<b>${esc(item.label)}</b>` +
-    (item.ext ? ' <span style="color:var(--accent);font-size:11px">· extended</span>' : "");
-  $("np-ytm").href = `https://music.youtube.com/watch?v=${item.videoId}`;
+    (item.ext ? ' <span style="color:var(--accent);font-size:11px">· extended</span>'
+     : vid !== item.videoId ? ' <span style="color:var(--accent);font-size:11px">· video</span>' : "");
+  $("np-ytm").href = `https://music.youtube.com/watch?v=${vid}`;
   // Hero extras: art from the playing video's thumbnail (no storage needed),
   // stars + tag row fetched per track change.
-  $("pb-art").src = `https://i.ytimg.com/vi/${item.videoId}/mqdefault.jpg`;
+  $("pb-art").src = `https://i.ytimg.com/vi/${vid}/mqdefault.jpg`;
   updateHeroMeta(item.pk);
   highlightPlaying(item.pk);
   renderQueue();
+  savePlayerState(0);
+  // Prefetch the next track's counterpart so auto-advance stays gapless.
+  const nx = state.queue[i + 1];
+  if (state.preferVideos && nx && !nx.ext) resolveOfficial(nx.pk);
 }
 
 async function updateHeroMeta(pk) {
@@ -1089,6 +1182,7 @@ function startProg() {
     $("pb-fill").style.width = d ? `${(c / d) * 100}%` : "0";
     $("pb-cur").textContent = fmtTime(c);
     $("pb-dur").textContent = fmtTime(d);
+    if (++progTick % 10 === 0) savePlayerState(c);   // persist position ~every 5s
   }, 500);
 }
 function fmtTime(s) { s = Math.floor(s || 0); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
@@ -1108,6 +1202,7 @@ function closePlayer() {
   $("playerbar").classList.remove("visible");
   $("pb-art").removeAttribute("src");
   $("pb-stars").innerHTML = ""; $("pb-tags").innerHTML = "";
+  localStorage.removeItem("playerState");
   highlightPlaying(null);
   renderQueue();   // drop the 'current' ring; the crate itself persists
 }
@@ -1619,8 +1714,8 @@ async function loadTree() {
 }
 
 const SMART_NODES = [
-  { type: "recent", name: "🕘 Recent listens" },
-  { type: "gems",   name: "💎 Forgotten gems" },
+  { type: "recent", name: "Recent listens", icon: "ti-history" },
+  { type: "gems",   name: "Forgotten gems", icon: "ti-diamond" },
 ];
 
 function renderTree() {
@@ -1633,7 +1728,7 @@ function renderTree() {
       && state.homeNode.id === p.playlist_id;
     return `<div class="treeitem ${active ? "active" : ""}" onclick="selectPlaylistByIdx(${i})">
       <button class="pinbtn ${p.pinned ? "pinned" : ""}" onclick="event.stopPropagation();togglePinByIdx(${i})"
-        title="${p.pinned ? "unpin from top" : "pin to top"}">📌</button>
+        title="${p.pinned ? "unpin from top" : "pin to top"}"><i class="ti ti-pin"></i></button>
       <span class="tname">${esc(p.playlist_name)}</span><span class="cnt">${p.n}</span>
     </div>`;
   }).join("") || '<div class="empty">No playlists ingested yet.</div>';
@@ -1643,9 +1738,9 @@ function renderTree() {
   $("tree-smart").innerHTML = SMART_NODES.map(s => {
     const active = state.homeNode && state.homeNode.type === s.type;
     return `<div class="treeitem ${active ? "active" : ""}" onclick="selectNode({type:'${s.type}'})">
-      <span class="tname">${s.name}</span></div>`;
+      <i class="ti ${s.icon}"></i> <span class="tname">${s.name}</span></div>`;
   }).join("")
-  + '<div class="treeitem ghost" title="New releases from watched labels, scored against your profiles — arrives with Stage 1 audio enrichment">📡 Discovery · stage 1</div>';
+  + '<div class="treeitem ghost" title="New releases from watched labels, scored against your profiles — arrives with Stage 1 audio enrichment"><i class="ti ti-radar-2"></i> Discovery · stage 1</div>';
 }
 
 function toggleTreeMore() { state.treeExpanded = !state.treeExpanded; renderTree(); }
@@ -1709,11 +1804,11 @@ function midRow(t) {
   const ext = t.playback_video_id
     ? ' <span style="color:var(--accent);font-size:10px" title="plays a set extended/video version">ext</span>' : "";
   return `<div class="midrow" id="mr-${t.track_pk}">
-    <button class="playbtn" ${playableId(t) ? "" : "disabled"} onclick="playFromList('${t.track_pk}')" title="Play from here">▶</button>
+    <button class="playbtn" ${playableId(t) ? "" : "disabled"} onclick="playFromList('${t.track_pk}')" title="Play from here"><i class="ti ti-player-play"></i></button>
     <span class="m">${esc(t.canonical_title)}${ext} <span class="a">· ${esc(t.canonical_artist)}</span></span>
     ${starButtons(t)}
-    <button class="qadd" onclick="queueAdd('${t.track_pk}')" title="Add to queue">⊕</button>
-    <button class="more" onclick="trackMenu('${t.track_pk}')" title="more">⋯</button>
+    <button class="mic" onclick="queueAdd('${t.track_pk}')" title="Add to queue"><i class="ti ti-circle-plus"></i></button>
+    <button class="mic" onclick="trackMenu('${t.track_pk}')" title="more"><i class="ti ti-dots"></i></button>
   </div>`;
 }
 
@@ -1724,8 +1819,11 @@ function playAllMid() {
 
 // ── The queue (= set crate). Server-persisted; survives sessions. ──
 async function loadServerQueue() {
-  try { state.pq = (await api("/api/queue")).queue || []; }
-  catch (e) { state.pq = []; }
+  try {
+    const d = await api("/api/queue");
+    state.pq = d.queue || [];
+    state.qMirror = d.mirror || null;
+  } catch (e) { state.pq = []; }
   renderQueue();
 }
 
@@ -1738,8 +1836,24 @@ function renderQueue() {
     <div class="qrow ${t.track_pk === cur ? "current" : ""}" onclick="playQueueFrom(${i})" title="Play from here">
       <div class="qm"><div class="qt">${esc(t.canonical_title)}</div>
         <div class="qa">${esc(t.canonical_artist)}${t.duration_ms ? " · " + fmtTime(t.duration_ms / 1000) : ""}</div></div>
-      <button class="qx" onclick="event.stopPropagation();queueRemove(${i})" title="Remove from queue">✕</button>
+      <button class="qx" onclick="event.stopPropagation();queueRemove(${i})" title="Remove from queue"><i class="ti ti-x"></i></button>
     </div>`).join("");
+}
+
+async function queueSave() {
+  if (!(state.pq || []).length) { toast("Queue is empty"); return; }
+  const def = (state.qMirror && state.qMirror.playlist_name) || "Set Crate";
+  const name = prompt(
+    "Save queue to a YTM playlist (re-saving updates the same playlist):\n\n" +
+    "Heads-up: YTM may swap extended versions to the audio version inside " +
+    "native playlists. In-app playback keeps your pinned versions.", def);
+  if (name === null) return;
+  toast("Saving to YTM…");
+  try {
+    const r = await api("/api/queue/save", { method: "POST", body: JSON.stringify({ name }) });
+    state.qMirror = { playlist_id: r.playlist_id, playlist_name: r.playlist_name };
+    toast(`Saved ${r.count} tracks → "${r.playlist_name}"`);
+  } catch (e) { toast(`Save failed: ${e.message}`); }
 }
 
 function persistQueue() {
@@ -1968,10 +2082,10 @@ function switchView(v) {
   $("search").style.display = lib ? "" : "none";
   $("facetrow").style.display = lib ? "" : "none";
   $("sumbar").style.display = lib ? "" : "none";
-  // Home-only compact search; player switches hero (Home) ↔ bottom bar (rest).
+  // Home-only compact search. The player hero renders only on Home — on
+  // other tabs it's hidden but audio keeps playing (locked decision).
   $("homesearch").style.display = v === "home" ? "" : "none";
   $("playerbar").classList.toggle("hero-mode", v === "home");
-  $("playerbar").classList.toggle("bar-mode", v !== "home");
   if (v === "home") { loadHome(); startHomePolling(); } else { stopHomePolling(); }
   if (v === "library") { loadTracks(); loadSourcePlaylists(); loadGrandTotal(); renderFacetRow(); }
   if (v === "review") loadVerdict();
@@ -2650,7 +2764,9 @@ document.addEventListener("keydown", (e) => {
 
 
 loadGrandTotal(); loadTagChips();
+$("pb-vidpref").classList.toggle("on", state.preferVideos);
 switchView("home");   // sets state.view, hides Library-only header controls, starts polling
+restorePlayer();      // hero survives a refresh: same queue + position, paused
 refreshBadges();   // populate the Review + Matches tab badges on boot
 </script>
 <!-- YouTube IFrame Player API — calls the global onYouTubeIframeAPIReady() above. -->

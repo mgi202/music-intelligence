@@ -74,6 +74,12 @@ class QueueRequest(BaseModel):
     track_pks: list[str] = Field(default_factory=list)
 
 
+class QueueSaveRequest(BaseModel):
+    # Optional new name for the mirrored YTM playlist; defaults to the stored
+    # mirror name, else "Set Crate".
+    name: Optional[str] = None
+
+
 def _parse_video_id(value: str | None) -> str | None:
     """Extract an 11-char YouTube videoId from a URL or accept a raw id."""
     if not value:
@@ -722,7 +728,9 @@ _QUEUE_TRACK_FIELDS = """t.track_pk, t.canonical_title, t.canonical_artist,
 
 @app.get("/api/queue")
 def get_queue():
-    """The persistent play queue (queue = set crate, merged concept), in order."""
+    """The persistent play queue (queue = set crate, merged concept), in order.
+    Includes the YTM mirror info (if the queue was ever saved) so the FE can
+    default the save-prompt to the existing playlist name."""
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -730,7 +738,57 @@ def get_queue():
                 FROM play_queue q JOIN tracks t ON t.track_pk = q.track_pk
                 ORDER BY q.position"""
         ).fetchall()
-        return {"queue": [dict(r) for r in rows]}
+        mirror = conn.execute("SELECT * FROM queue_mirror WHERE id = 1").fetchone()
+        return {"queue": [dict(r) for r in rows],
+                "mirror": dict(mirror) if mirror else None}
+    finally:
+        conn.close()
+
+
+@app.post("/api/queue/save")
+def save_queue(body: QueueSaveRequest):
+    """Mirror the queue to a real YTM playlist (save ⇗), rewrite-on-reorder.
+
+    First save creates the playlist; later saves rewrite the same one. If the
+    mirrored playlist was deleted on YTM, we recreate it transparently.
+    Known wall: YTM may server-swap extended versions to audio inside native
+    playlists — in-app playback keeps the pinned versions regardless."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT COALESCE(t.playback_video_id, t.ytm_track_id) AS video_id
+               FROM play_queue q JOIN tracks t ON t.track_pk = q.track_pk
+               ORDER BY q.position"""
+        ).fetchall()
+        video_ids = [r["video_id"] for r in rows if r["video_id"]]
+        if not video_ids:
+            raise HTTPException(400, "Queue is empty or has no playable tracks")
+
+        mirror = conn.execute("SELECT * FROM queue_mirror WHERE id = 1").fetchone()
+        name = (body.name or "").strip() or (
+            mirror["playlist_name"] if mirror else "Set Crate")
+        adapter = _make_ytm_adapter()
+        try:
+            pid = adapter.write_playlist(
+                mirror["playlist_id"] if mirror else None,
+                video_ids, playlist_name=name)
+        except Exception:
+            if not mirror:
+                raise
+            # Mirror playlist likely deleted on YTM — recreate from scratch.
+            pid = adapter.write_playlist(None, video_ids, playlist_name=name)
+
+        conn.execute(
+            """INSERT INTO queue_mirror (id, playlist_id, playlist_name, updated_at)
+               VALUES (1, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(id) DO UPDATE SET
+                 playlist_id = excluded.playlist_id,
+                 playlist_name = excluded.playlist_name,
+                 updated_at = CURRENT_TIMESTAMP""",
+            (pid, name),
+        )
+        conn.commit()
+        return {"playlist_id": pid, "playlist_name": name, "count": len(video_ids)}
     finally:
         conn.close()
 
@@ -758,6 +816,48 @@ def put_queue(body: QueueRequest):
                 kept += 1
         conn.commit()
         return {"count": kept}
+    finally:
+        conn.close()
+
+
+@app.get("/api/tracks/{track_pk}/official-video")
+def official_video(track_pk: str):
+    """Resolve (lazily, once per track) YTM's official-video counterpart.
+
+    Powers the hero's "prefer videos" toggle: play-time priority is
+    pinned extended > official video (toggle on) > audio. Cached in
+    tracks.official_video_id; official_video_checked_at marks a completed
+    lookup so each track hits YTM at most once. Transient YTM failures are
+    NOT stamped as checked, so they retry on a later play."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """SELECT ytm_track_id, official_video_id, official_video_checked_at
+               FROM tracks WHERE track_pk = ?""",
+            (track_pk,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "Track not found")
+        if row["official_video_checked_at"]:
+            return {"official_video_id": row["official_video_id"], "cached": True}
+        if not row["ytm_track_id"]:
+            conn.execute(
+                "UPDATE tracks SET official_video_checked_at = CURRENT_TIMESTAMP "
+                "WHERE track_pk = ?", (track_pk,))
+            conn.commit()
+            return {"official_video_id": None, "cached": False}
+        try:
+            vid = _make_ytm_adapter().get_official_video_counterpart(row["ytm_track_id"])
+        except Exception as e:  # noqa: BLE001 — YTM hiccup: report, don't stamp
+            raise HTTPException(502, f"Counterpart lookup failed ({e})")
+        conn.execute(
+            """UPDATE tracks SET official_video_id = ?,
+                   official_video_checked_at = CURRENT_TIMESTAMP
+               WHERE track_pk = ?""",
+            (vid, track_pk),
+        )
+        conn.commit()
+        return {"official_video_id": vid, "cached": False}
     finally:
         conn.close()
 

@@ -102,6 +102,13 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tracks ADD COLUMN verdict_skipped_at TEXT")
         print("Migration applied: tracks.verdict_skipped_at")
 
+    # 2026-07-04 (prefer-videos toggle): YTM's own Song↔Video counterpart,
+    # resolved lazily at play time; checked_at caps lookups at one per track.
+    if "official_video_id" not in existing:
+        conn.execute("ALTER TABLE tracks ADD COLUMN official_video_id TEXT")
+        conn.execute("ALTER TABLE tracks ADD COLUMN official_video_checked_at TEXT")
+        print("Migration applied: tracks.official_video_id + official_video_checked_at")
+
     # 2026-07-03 (overnight jobs): Bandcamp URL per track — set manually or by
     # the nightly search sweep; enrichment uses it as the manual_url path.
     if "bandcamp_url" not in existing:
