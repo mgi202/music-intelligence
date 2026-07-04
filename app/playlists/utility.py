@@ -234,23 +234,29 @@ def seed_example_rules(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Locked tag vocabulary (Verdict Queue, 2026-07-02).
+# Locked tag vocabulary (TAG-VOCAB-DESIGN.md).
 #
-# The functional (8) and personal (7) layers are LOCKED in TAG-VOCAB-DESIGN.md.
-# Naming happens there, once — never per-track. Two subgenre profiles are kept
-# from the original spec seed; more arrive when the subgenre vocab locks (a data
-# change only — adding tag_profiles rows needs NO code change here).
+# Functional (8) + personal (7) LOCKED 2026-07-02; family (11) + subgenre (24)
+# + era (5) LOCKED 2026-07-03 — 55 profiles total, the FINAL budget (amended
+# 50→55 to admit the era layer; any future addition must name the tag it
+# replaces). Naming happens there, once — never per-track.
 #
-# descriptions are copied verbatim from TAG-VOCAB-DESIGN.md so the Verdict Queue
-# FE can render each chip's definition as a tooltip at tagging time.
+# descriptions are copied verbatim from TAG-VOCAB-DESIGN.md (or written in its
+# voice for family/subgenre/era) so the FE renders each chip's definition as a
+# tooltip at tagging time.
 #
 # Functional/personal carry no acoustic bands (bpm/energy/valence) on purpose:
 # they describe a track's JOB in a set arc / a listening MOMENT, not its sound.
-# context_terms exist only to widen tag→profile mapping; the tag_name is the
-# primary key term (matching is separator-insensitive, see reference_manager).
+# Era is a VIBE, not a release date — "sounds like", judged by ear.
+# context_terms exist only to widen tag→profile mapping (they carry each
+# profile's aliased raw forms so profiles_for_tag maps folded community tags
+# even before tag_vocabulary aliases apply); the tag_name is the primary key
+# term (matching is separator-insensitive, see reference_manager). Era profiles
+# deliberately carry NO context terms: hidden decade tags (80s/90s) may inform
+# the Review card's prefill but must never surface as suggestion chips.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# functional (8) + personal (7) + the two kept subgenre profiles.
+# functional (8) + personal (7) + family (11) + subgenre (24) + era (5).
 LOCKED_TAG_PROFILES: list[dict] = [
     # ── Functional — a track's job in a set arc ──
     {"profile_id": "warm-up", "sort_order": 0, "tag_name": "warm-up", "taxonomy_layer": "functional",
@@ -311,23 +317,151 @@ LOCKED_TAG_PROFILES: list[dict] = [
                     "without dominating.",
      "context_terms": ["dinner", "hosting", "background social"]},
 
-    # ── Subgenre — kept from the original seed; the rest arrive at vocab lock ──
-    {"profile_id": "warehouse-industrial", "sort_order": 0, "tag_name": "warehouse-industrial",
+    # ── Family — the coarse playlist filter (11, LOCKED 2026-07-03) ──
+    {"profile_id": "house", "sort_order": 0, "tag_name": "house", "taxonomy_layer": "family",
+     "description": "Four-on-the-floor club music in all its warmth — the home "
+                    "family for every house style.",
+     "context_terms": ["electro house"]},
+    {"profile_id": "techno", "sort_order": 1, "tag_name": "techno", "taxonomy_layer": "family",
+     "description": "Machine-driven, hypnotic, functional club music — Detroit "
+                    "to Berlin."},
+    {"profile_id": "bass", "sort_order": 2, "tag_name": "bass", "taxonomy_layer": "family",
+     "description": "Umbrella family: UK garage, DnB, dubstep, breakbeat territory.",
+     "context_terms": ["jungle"]},
+    {"profile_id": "ambient", "sort_order": 3, "tag_name": "ambient", "taxonomy_layer": "family",
+     "description": "Beatless or near-beatless atmosphere — texture and space "
+                    "over rhythm."},
+    {"profile_id": "pop", "sort_order": 4, "tag_name": "pop", "taxonomy_layer": "family",
+     "description": "Songcraft built for the chorus — mainstream melodic vocal "
+                    "music of any era.",
+     "context_terms": ["indie pop", "dance pop"]},
+    {"profile_id": "rock", "sort_order": 5, "tag_name": "rock", "taxonomy_layer": "family",
+     "description": "Guitar-band music in all its shades — indie, alternative, "
+                    "classic, punk.",
+     "context_terms": ["indie rock", "alternative rock", "classic rock", "soft rock",
+                       "psychedelic rock", "punk", "post punk", "pop rock", "pop/rock"]},
+    {"profile_id": "hip hop", "sort_order": 6, "tag_name": "hip hop", "taxonomy_layer": "family",
+     "description": "Rap vocals over beats — the whole hip-hop continuum, boom "
+                    "bap to trap-adjacent.",
+     "context_terms": ["rap", "pop rap", "hiphop", "hip hop rap", "hip hop/rap"]},
+    {"profile_id": "r&b-soul", "sort_order": 7, "tag_name": "r&b-soul", "taxonomy_layer": "family",
+     "description": "The soul lineage — classic soul through contemporary R&B.",
+     "context_terms": ["soul", "rnb", "r&b", "r b", "r'n'b"]},
+    {"profile_id": "disco-funk", "sort_order": 8, "tag_name": "disco-funk", "taxonomy_layer": "family",
+     "description": "The groove lineage — disco, funk and everything that "
+                    "swings on the one.",
+     "context_terms": ["disco", "funk", "funk / soul", "funk soul"]},
+    {"profile_id": "jazz", "sort_order": 9, "tag_name": "jazz", "taxonomy_layer": "family",
+     "description": "Improvisation-led — swing, modal, fusion and their "
+                    "descendants."},
+    {"profile_id": "reggae", "sort_order": 10, "tag_name": "reggae", "taxonomy_layer": "family",
+     "description": "The Jamaican lineage — reggae, dub and dancehall.",
+     "context_terms": ["dancehall"]},
+
+    # ── Subgenre — the precise layer (24, LOCKED 2026-07-03) ──
+    {"profile_id": "deep house", "sort_order": 0, "tag_name": "deep house", "taxonomy_layer": "subgenre",
+     "description": "Warm, soulful house — smoky chords, subdued energy, "
+                    "late-night warmth."},
+    {"profile_id": "tech house", "sort_order": 1, "tag_name": "tech house", "taxonomy_layer": "subgenre",
+     "description": "House's groove with techno's stripped toolkit — chunky, "
+                    "rolling, club-functional."},
+    {"profile_id": "progressive house", "sort_order": 2, "tag_name": "progressive house",
      "taxonomy_layer": "subgenre",
-     "description": "Warehouse industrial techno: mechanical, heavy, maximum energy",
-     "bpm_min": 128.0, "bpm_max": 138.0, "energy_min": 0.8, "energy_max": 1.0,
-     "valence_min": None, "valence_max": 0.35,
-     "positive_prompt": "dark mechanical driving warehouse techno industrial percussion peak-time energy cold relentless",
-     "negative_prompt": "melodic house pop vocal commercial EDM relaxed ambient uplifting trance",
-     "context_terms": ["industrial", "warehouse", "mechanical", "hard techno", "brutal"]},
-    {"profile_id": "hypnotic-rolling", "sort_order": 1, "tag_name": "hypnotic-rolling",
+     "description": "Long-arc melodic house — layered builds that reward "
+                    "patience."},
+    {"profile_id": "tribal house", "sort_order": 3, "tag_name": "tribal house", "taxonomy_layer": "subgenre",
+     "description": "Percussion-first house — stacked drums and chant energy."},
+    {"profile_id": "garage house", "sort_order": 4, "tag_name": "garage house", "taxonomy_layer": "subgenre",
+     "description": "The New Jersey/NYC lineage — gospel-tinged, swung, "
+                    "piano-led house."},
+    {"profile_id": "uk garage", "sort_order": 5, "tag_name": "uk garage", "taxonomy_layer": "subgenre",
+     "description": "Swung 2-step shuffle, chopped vocals, sub-bass — the UK's "
+                    "own garage.",
+     "context_terms": ["ukg"]},
+    {"profile_id": "minimal", "sort_order": 6, "tag_name": "minimal", "taxonomy_layer": "subgenre",
+     "description": "Reduction as the point — sparse, loopy, microscopic club "
+                    "music.",
+     "context_terms": ["minimal techno"]},
+    {"profile_id": "electro", "sort_order": 7, "tag_name": "electro", "taxonomy_layer": "subgenre",
+     "description": "The electro style (808 robotic funk) AND its modern club "
+                    "descendants — Discogs uses it for both; when unsure, judge "
+                    "by ear."},
+    {"profile_id": "nu-disco", "sort_order": 8, "tag_name": "nu-disco", "taxonomy_layer": "subgenre",
+     "description": "Disco re-tooled with modern production — loops, filters, "
+                    "glitter."},
+    {"profile_id": "breakbeat", "sort_order": 9, "tag_name": "breakbeat", "taxonomy_layer": "subgenre",
+     "description": "Broken beats at club weight — breaks instead of "
+                    "four-to-the-floor.",
+     "context_terms": ["breaks"]},
+    {"profile_id": "drum and bass", "sort_order": 10, "tag_name": "drum and bass",
      "taxonomy_layer": "subgenre",
-     "description": "Hypnotic rolling techno: repetitive, trancey, steady groove",
-     "bpm_min": 126.0, "bpm_max": 132.0, "energy_min": 0.65, "energy_max": 0.85,
-     "valence_min": 0.25, "valence_max": 0.5,
-     "positive_prompt": "hypnotic rolling techno repetitive groove trance-like steady minimalist loop",
-     "negative_prompt": "aggressive industrial heavy drop anthem melodic vocal pop",
-     "context_terms": ["hypnotic", "rolling", "minimal", "loopy", "Berlin", "deep techno"]},
+     "description": "Fast broken beats over heavy sub-bass — jungle's "
+                    "streamlined descendant.",
+     "context_terms": ["drum n bass", "dnb", "drum & bass", "d&b"]},
+    {"profile_id": "dubstep", "sort_order": 11, "tag_name": "dubstep", "taxonomy_layer": "subgenre",
+     "description": "Half-time sway, huge sub-bass, space — the UK original."},
+    {"profile_id": "trance", "sort_order": 12, "tag_name": "trance", "taxonomy_layer": "subgenre",
+     "description": "Arpeggios, long builds and euphoric release at full "
+                    "stretch."},
+    {"profile_id": "leftfield", "sort_order": 13, "tag_name": "leftfield", "taxonomy_layer": "subgenre",
+     "description": "Club-adjacent but off the grid — experimental electronics "
+                    "with a pulse."},
+    {"profile_id": "downtempo", "sort_order": 14, "tag_name": "downtempo", "taxonomy_layer": "subgenre",
+     "description": "Slow-burn electronic grooves — head-nod tempo, home "
+                    "listening or comedown.",
+     "context_terms": ["chillout", "chill out"]},
+    {"profile_id": "trip hop", "sort_order": 15, "tag_name": "trip hop", "taxonomy_layer": "subgenre",
+     "description": "Dusty breaks, cinematic mood — the Bristol blueprint.",
+     "context_terms": ["triphop"]},
+    {"profile_id": "synth-pop", "sort_order": 16, "tag_name": "synth-pop", "taxonomy_layer": "subgenre",
+     "description": "Synthesisers carrying the song — from new romantic to "
+                    "modern electropop.",
+     "context_terms": ["electropop", "new romantic", "synthpop"]},
+    {"profile_id": "new wave", "sort_order": 17, "tag_name": "new wave", "taxonomy_layer": "subgenre",
+     "description": "Post-punk gone pop — angular, synth-flecked late-70s/80s "
+                    "guitar pop."},
+    {"profile_id": "contemporary r&b", "sort_order": 18, "tag_name": "contemporary r&b",
+     "taxonomy_layer": "subgenre",
+     "description": "Modern R&B — smooth production, melisma, hip-hop-adjacent "
+                    "beats.",
+     "context_terms": ["contemporary r b"]},
+    {"profile_id": "trap", "sort_order": 19, "tag_name": "trap", "taxonomy_layer": "subgenre",
+     "description": "808s, rolling hi-hats, half-time bounce — modern rap "
+                    "production."},
+    {"profile_id": "gangsta rap", "sort_order": 20, "tag_name": "gangsta rap", "taxonomy_layer": "subgenre",
+     "description": "Street-narrative rap — G-funk and its hard-edged "
+                    "descendants.",
+     "context_terms": ["gangsta"]},
+    {"profile_id": "neo soul", "sort_order": 21, "tag_name": "neo soul", "taxonomy_layer": "subgenre",
+     "description": "Soul revived with live warmth and hip-hop feel.",
+     "context_terms": ["neosoul"]},
+    {"profile_id": "afro house", "sort_order": 22, "tag_name": "afro house", "taxonomy_layer": "subgenre",
+     "description": "African rhythms driving house — organic percussion, vocal "
+                    "chants, rolling groove.",
+     "context_terms": ["afrohouse"]},
+    {"profile_id": "dream pop", "sort_order": 23, "tag_name": "dream pop", "taxonomy_layer": "subgenre",
+     "description": "Hazy, reverb-washed guitar pop — shoegaze folded in; "
+                    "texture over riffs.",
+     "context_terms": ["shoegaze"]},
+
+    # ── Era — a production VIBE, not a release date (5, LOCKED 2026-07-03).
+    #    "Sounds like", judged by ear — a 2023 track can be 80s-sound. The
+    #    Review card prefills from release decade (confirm-or-correct). ──
+    {"profile_id": "70s-sound", "sort_order": 0, "tag_name": "70s-sound", "taxonomy_layer": "era",
+     "description": "Sounds like 70s production — analogue warmth, live "
+                    "players, tape — regardless of when it was released."},
+    {"profile_id": "80s-sound", "sort_order": 1, "tag_name": "80s-sound", "taxonomy_layer": "era",
+     "description": "Sounds like 80s production — gated drums, synth sheen, "
+                    "big reverb — regardless of when it was released."},
+    {"profile_id": "90s-sound", "sort_order": 2, "tag_name": "90s-sound", "taxonomy_layer": "era",
+     "description": "Sounds like 90s production — regardless of when it was "
+                    "released."},
+    {"profile_id": "00s-sound", "sort_order": 3, "tag_name": "00s-sound", "taxonomy_layer": "era",
+     "description": "Sounds like 00s production — digital polish, loudness — "
+                    "regardless of when it was released."},
+    {"profile_id": "modern", "sort_order": 4, "tag_name": "modern", "taxonomy_layer": "era",
+     "description": "Sounds like now — current production aesthetics, no "
+                    "period costume."},
 ]
 
 # Two tie-breaker rules from TAG-VOCAB-DESIGN.md, rendered in the Verdict Queue's
@@ -345,7 +479,10 @@ FUNCTIONAL_TIEBREAKERS: list[dict] = [
 # Old spec profile_id → locked profile_id. Semantically-closest mapping, used by
 # reconcile_tag_profiles() to migrate any existing reference labels when the DB
 # was seeded before the vocab lock. Profiles absent here and not in the locked
-# set (e.g. melodic-late-night) are dropped by reconcile IF label-free.
+# set (e.g. melodic-late-night, and — since the 2026-07-03 subgenre lock — the
+# interim warehouse-industrial / hypnotic-rolling seeds, which match nothing in
+# the locked 24) are dropped by reconcile IF label-free, kept + reported in
+# `kept_with_labels` otherwise.
 PROFILE_RENAME_MAP: dict[str, str] = {
     "warm-up-groove": "warm-up",
     "peak-time-dark-techno": "peak-time",

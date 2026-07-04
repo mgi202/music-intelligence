@@ -217,8 +217,10 @@ CREATE TABLE IF NOT EXISTS tag_profiles (
     profile_id          TEXT PRIMARY KEY,
     tag_name            TEXT NOT NULL UNIQUE,
     description         TEXT,
+    -- 'era' added 2026-07-04 (vocab lock): a production VIBE ("sounds like"),
+    -- not a release date. Pre-existing DBs are rebuilt by init_db migration.
     taxonomy_layer      TEXT NOT NULL CHECK (taxonomy_layer IN (
-        'family', 'subgenre', 'functional', 'personal'
+        'family', 'subgenre', 'functional', 'personal', 'era'
     )),
     bpm_min             REAL,
     bpm_max             REAL,

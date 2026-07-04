@@ -104,7 +104,9 @@ def test_reconcile_seeds_locked_vocab_counts(db):
     finally:
         conn.close()
     counts = {r["taxonomy_layer"]: r["n"] for r in rows}
-    assert counts == {"functional": 8, "personal": 7, "subgenre": 2}
+    # The FINAL budget: 55 profiles (TAG-VOCAB-DESIGN.md, locked 2026-07-03).
+    assert counts == {"functional": 8, "personal": 7, "family": 11,
+                      "subgenre": 24, "era": 5}
 
 
 # ── Queue exclusions + ordering ────────────────────────────────────────────────
@@ -134,10 +136,10 @@ def test_queue_prioritises_under_trained_profile_over_recency(db):
     with no mapping — training value beats added_at."""
     from app.tags.verdict_queue import build_queue
     with db_conn(db) as c:
-        # Older track, but its tag maps to the under-trained 'hypnotic-rolling'.
+        # Older track, but its tag maps to the under-trained 'deep house'.
         insert_track(c, "suggests", canonical_artist="Deepchord", ytm_track_id="v1",
                      created_at="2026-01-01T00:00:00Z")
-        _pub(c, "suggests", "hypnotic", "lastfm", 0.3)
+        _pub(c, "suggests", "deep house", "lastfm", 0.3)
         # Newer track, no public tags that map to any profile.
         insert_track(c, "newer", canonical_artist="Nobody", ytm_track_id="v2",
                      created_at="2026-07-01T00:00:00Z")
@@ -145,7 +147,7 @@ def test_queue_prioritises_under_trained_profile_over_recency(db):
 
     tracks = build_queue(db_path=db)["tracks"]
     assert tracks[0]["pk"] == "suggests"
-    assert tracks[0]["suggestions"][0]["tag_name"] == "hypnotic-rolling"
+    assert tracks[0]["suggestions"][0]["tag_name"] == "deep house"
 
 
 def test_queue_artist_diversity_cap(db):
@@ -179,7 +181,7 @@ def test_newest_lens_orders_by_created_at_desc(db):
                      created_at="2026-07-01T00:00:00Z")
         # Give the OLD track a starved-profile suggestion — training value must
         # NOT reorder the newest lens.
-        _pub(c, "old", "hypnotic", "lastfm", 0.3)
+        _pub(c, "old", "deep house", "lastfm", 0.3)
 
     q = build_queue(db_path=db, sort="newest")
     assert [t["pk"] for t in q["tracks"]] == ["new", "mid", "old"]
@@ -232,23 +234,23 @@ def test_suggestion_ranking_and_evidence(db):
     with db_conn(db) as c:
         insert_track(c, "t1", canonical_artist="Surgeon", normalized_artist="surgeon",
                      ytm_track_id="v1")
-        # Two sources support warehouse-industrial; one supports hypnotic-rolling.
-        _pub(c, "t1", "warehouse", "lastfm", 0.4)
-        _pub(c, "t1", "industrial", "discogs", 0.9)
-        _pub(c, "t1", "hypnotic", "lastfm", 0.2)
-        # A same-artist prior for warehouse-industrial (tagged on another track).
+        # Two sources support deep house; one supports minimal.
+        _pub(c, "t1", "deep house", "lastfm", 0.4)
+        _pub(c, "t1", "deep house", "discogs", 0.9)
+        _pub(c, "t1", "minimal", "lastfm", 0.2)
+        # A same-artist prior for deep house (tagged on another track).
         insert_track(c, "prior", canonical_artist="Surgeon", normalized_artist="surgeon",
                      ytm_track_id="vp")
-        _manual(c, "prior", "warehouse-industrial")
+        _manual(c, "prior", "deep house")
 
     sugg = build_queue(db_path=db)["tracks"][0]["suggestions"]
     names = [s["tag_name"] for s in sugg]
-    # warehouse-industrial (2 sources + artist prior) ranks above hypnotic-rolling.
-    assert names[0] == "warehouse-industrial"
-    assert "hypnotic-rolling" in names
+    # deep house (2 sources + artist prior) ranks above minimal.
+    assert names[0] == "deep house"
+    assert "minimal" in names
     ev = " || ".join(sugg[0]["evidence"])
-    assert "Discogs: Industrial" in ev            # discogs title-cased
-    assert "Last.fm: warehouse ×40" in ev         # count recovered from confidence
+    assert "Discogs: Deep House" in ev            # discogs title-cased
+    assert "Last.fm: deep house ×40" in ev        # count recovered from confidence
     assert "other Surgeon track" in ev            # artist prior line
 
 
@@ -262,29 +264,29 @@ def test_reject_creates_sticky_near_miss(db):
     with db_conn(db) as c:
         insert_track(c, "t1", canonical_artist="X")
 
-    reject_suggestion("t1", "hypnotic-rolling", db_path=db)
+    reject_suggestion("t1", "deep house", db_path=db)
     labels = {(l["profile_id"], l["label_type"]) for l in
               list_reference_labels(track_pk="t1", db_path=db)}
-    assert ("hypnotic-rolling", "near_miss") in labels
+    assert ("deep house", "near_miss") in labels
 
     # Idempotent.
-    reject_suggestion("t1", "hypnotic-rolling", db_path=db)
+    reject_suggestion("t1", "deep house", db_path=db)
     near = [l for l in list_reference_labels(track_pk="t1", db_path=db)
             if l["label_type"] == "near_miss"]
     assert len(near) == 1
 
     # Derivation must NOT promote a rejected track even if its tag now maps.
-    apply_tag("t1", "hypnotic-rolling", db_path=db)
+    apply_tag("t1", "deep house", db_path=db)
     labels = {(l["profile_id"], l["label_type"]) for l in
               list_reference_labels(track_pk="t1", db_path=db)}
-    assert ("hypnotic-rolling", "positive") not in labels
-    assert ("hypnotic-rolling", "near_miss") in labels
+    assert ("deep house", "positive") not in labels
+    assert ("deep house", "near_miss") in labels
 
     # And the near_miss survives a bare reconcile (it is not an auto label).
     recompute_track_references("t1", db_path=db)
     labels = {(l["profile_id"], l["label_type"]) for l in
               list_reference_labels(track_pk="t1", db_path=db)}
-    assert ("hypnotic-rolling", "near_miss") in labels
+    assert ("deep house", "near_miss") in labels
 
 
 def test_reject_demotes_existing_positive(db):
@@ -326,14 +328,14 @@ def test_skip_unknown_track_raises(db):
 def test_api_verdict_queue_reject_skip(client, db):
     with db_conn(db) as c:
         insert_track(c, "t1", canonical_artist="Deepchord", ytm_track_id="v1")
-        _pub(c, "t1", "hypnotic", "lastfm", 0.3)
+        _pub(c, "t1", "trance", "lastfm", 0.3)
 
     q = client.get("/api/verdict/queue?limit=5").json()
     assert q["tracks"][0]["pk"] == "t1"
     assert q["meta"]["eligible_total"] == 1
 
     # Reject the suggestion → sticky near_miss, tag not applied.
-    r = client.post("/api/tracks/t1/verdict/reject/hypnotic-rolling")
+    r = client.post("/api/tracks/t1/verdict/reject/trance")
     assert r.status_code == 200 and r.json()["rejected"] is True
 
     # Skip → drops out of the queue.

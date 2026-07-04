@@ -9,7 +9,7 @@ Usage:
     python scripts/apply_tag.py --track-pk "isrc:GBXXX001" --tag "peak-time-dark-techno"
 
     # Apply with a note
-    python scripts/apply_tag.py --track-pk "isrc:GBXXX001" --tag "warehouse-industrial" --notes "Confirmed at Fabric"
+    python scripts/apply_tag.py --track-pk "isrc:GBXXX001" --tag "deep house" --notes "Confirmed at Fabric"
 
     # Remove a tag
     python scripts/apply_tag.py --track-pk "isrc:GBXXX001" --tag "peak-time-dark-techno" --remove
@@ -18,7 +18,7 @@ Usage:
     python scripts/apply_tag.py --track-pk "isrc:GBXXX001" --list
 
     # Search for all tracks with a tag
-    python scripts/apply_tag.py --search "warehouse-industrial"
+    python scripts/apply_tag.py --search "deep house"
 
     # Find a track by artist+title (shows its track_pk)
     python scripts/apply_tag.py --find "Surgeon" "Body Hammer"

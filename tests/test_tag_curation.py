@@ -36,47 +36,52 @@ def _eff(db_path, pk):
 
 # ── effective view ───────────────────────────────────────────────────────────
 
+# NOTE (2026-07-04): the locked vocab seed (app/tags/vocab_lock.py) now ships
+# rulings for real tags (electronic hidden, disco/synthpop aliased, …) on every
+# init. These tests exercise the curation MECHANISM, so they use tags outside
+# the locked seed to stay independent of ruling changes.
+
 def test_duplicate_tag_from_two_sources_collapses(db):
     with db_conn(db) as c:
         insert_track(c, "t1")
-        _tag(c, "t1", "electronic", "lastfm")
-        _tag(c, "t1", "electronic", "musicbrainz")
-    assert _eff(db, "t1") == ["electronic"]  # was "electronic electronic"
+        _tag(c, "t1", "dub techno", "lastfm")
+        _tag(c, "t1", "dub techno", "musicbrainz")
+    assert _eff(db, "t1") == ["dub techno"]  # was "dub techno dub techno"
 
 
 def test_global_hide_removes_tag_everywhere(db):
     with db_conn(db) as c:
         insert_track(c, "t1")
-        _tag(c, "t1", "electronic", "lastfm")
+        _tag(c, "t1", "chart noise", "lastfm")
         _tag(c, "t1", "house", "lastfm")
-        c.execute("INSERT INTO tag_vocabulary (tag, hidden) VALUES ('electronic', 1)")
+        c.execute("INSERT INTO tag_vocabulary (tag, hidden) VALUES ('chart noise', 1)")
     assert _eff(db, "t1") == ["house"]
 
 
 def test_alias_folds_spelling_variants(db):
     with db_conn(db) as c:
         insert_track(c, "t1")
-        _tag(c, "t1", "synthpop", "lastfm")
-        _tag(c, "t1", "synth-pop", "musicbrainz")
-        c.execute("INSERT INTO tag_vocabulary (tag, alias_to) VALUES ('synthpop', 'synth-pop')")
-    assert _eff(db, "t1") == ["synth-pop"]
+        _tag(c, "t1", "dubtechno", "lastfm")
+        _tag(c, "t1", "dub techno", "musicbrainz")
+        c.execute("INSERT INTO tag_vocabulary (tag, alias_to) VALUES ('dubtechno', 'dub techno')")
+    assert _eff(db, "t1") == ["dub techno"]
 
 
 def test_per_track_reject_then_survives_reenrichment(db):
     with db_conn(db) as c:
         insert_track(c, "t1")
-        _tag(c, "t1", "disco", "lastfm")
+        _tag(c, "t1", "dubby", "lastfm")
         _tag(c, "t1", "house", "lastfm")
-    assert _eff(db, "t1") == ["disco", "house"]
+    assert _eff(db, "t1") == ["dubby", "house"]
 
     with db_conn(db) as c:
         c.execute("INSERT INTO track_tag_overrides (track_pk, tag, action) "
-                  "VALUES ('t1', 'disco', 'reject')")
+                  "VALUES ('t1', 'dubby', 'reject')")
     assert _eff(db, "t1") == ["house"]
 
-    # Re-enrichment re-adds 'disco' from a different source — must stay rejected.
+    # Re-enrichment re-adds 'dubby' from a different source — must stay rejected.
     with db_conn(db) as c:
-        _tag(c, "t1", "disco", "discogs")
+        _tag(c, "t1", "dubby", "discogs")
     assert _eff(db, "t1") == ["house"]
 
 
@@ -106,18 +111,18 @@ def test_eligibility_excludes_rejected_and_hidden(db):
     from app.playlists.compiler import compile_playlist
     with db_conn(db) as c:
         insert_track(c, "t1")
-        _tag(c, "t1", "disco", "lastfm")
-        _make_rule(c, tags_any=["disco"])
+        _tag(c, "t1", "dubby", "lastfm")
+        _make_rule(c, tags_any=["dubby"])
     assert compile_playlist("r1", db_path=db) == ["t1"]  # eligible
 
     with db_conn(db) as c:
         c.execute("INSERT INTO track_tag_overrides (track_pk, tag, action) "
-                  "VALUES ('t1', 'disco', 'reject')")
+                  "VALUES ('t1', 'dubby', 'reject')")
     assert compile_playlist("r1", db_path=db) == []  # reject removes eligibility
 
     with db_conn(db) as c:
         c.execute("DELETE FROM track_tag_overrides")
-        c.execute("INSERT INTO tag_vocabulary (tag, hidden) VALUES ('disco', 1)")
+        c.execute("INSERT INTO tag_vocabulary (tag, hidden) VALUES ('dubby', 1)")
     assert compile_playlist("r1", db_path=db) == []  # global hide removes too
 
 
@@ -125,9 +130,9 @@ def test_eligibility_matches_aliased_tag(db):
     from app.playlists.compiler import compile_playlist
     with db_conn(db) as c:
         insert_track(c, "t1")
-        _tag(c, "t1", "synthpop", "lastfm")
-        c.execute("INSERT INTO tag_vocabulary (tag, alias_to) VALUES ('synthpop','synth-pop')")
-        _make_rule(c, tags_any=["synth-pop"])  # rule uses canonical name
+        _tag(c, "t1", "dubtechno", "lastfm")
+        c.execute("INSERT INTO tag_vocabulary (tag, alias_to) VALUES ('dubtechno','dub techno')")
+        _make_rule(c, tags_any=["dub techno"])  # rule uses canonical name
     assert compile_playlist("r1", db_path=db) == ["t1"]
 
 
@@ -168,14 +173,14 @@ def test_api_hide_then_tag_disappears_from_filters_and_cards(client, db):
 
 def test_api_reject_and_unreject(client, db):
     with db_conn(db) as c:
-        insert_track(c, "a"); _tag(c, "a", "disco", "lastfm"); _tag(c, "a", "house", "lastfm")
-    assert client.post("/api/tracks/a/tags/disco/reject").status_code == 200
+        insert_track(c, "a"); _tag(c, "a", "dubby", "lastfm"); _tag(c, "a", "house", "lastfm")
+    assert client.post("/api/tracks/a/tags/dubby/reject").status_code == 200
     tags = [g["tag"] for g in client.get("/api/tracks").json()["tracks"][0]["tags"]]
-    assert tags == ["disco"][:0] + ["house"]  # disco gone
+    assert tags == ["dubby"][:0] + ["house"]  # dubby gone
     # undo
-    assert client.delete("/api/tracks/a/tags/disco/reject").status_code == 200
+    assert client.delete("/api/tracks/a/tags/dubby/reject").status_code == 200
     tags = sorted(g["tag"] for g in client.get("/api/tracks").json()["tracks"][0]["tags"])
-    assert tags == ["disco", "house"]
+    assert tags == ["dubby", "house"]
 
 
 def test_api_alias_is_mutually_exclusive_with_hide(client, db):
@@ -361,12 +366,13 @@ def test_api_reference_profiles_vocabulary(client, db):
     from app.playlists.utility import seed_starter_tag_profiles
     seed_starter_tag_profiles(db)
     rows = client.get("/api/reference/profiles").json()["profiles"]
-    # Locked vocab (TAG-VOCAB-DESIGN.md): 8 functional + 7 personal + 2 subgenre.
-    assert len(rows) == 17
+    # Locked vocab (TAG-VOCAB-DESIGN.md, 2026-07-03): the FINAL 55-profile budget.
+    assert len(rows) == 55
     layers = [r["taxonomy_layer"] for r in rows]
     assert layers == sorted(layers)  # ordered by layer for grouping
     from collections import Counter
-    assert Counter(layers) == {"functional": 8, "personal": 7, "subgenre": 2}
+    assert Counter(layers) == {"functional": 8, "personal": 7, "family": 11,
+                               "subgenre": 24, "era": 5}
     assert all({"profile_id", "tag_name", "taxonomy_layer", "description"} <= r.keys() for r in rows)
 
 

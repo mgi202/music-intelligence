@@ -45,7 +45,7 @@ _AUTO_PREFIX = "auto:"
 # the other. Stage 0 has no audio features yet, so contrast is the only way to
 # populate negatives automatically. Declared one direction; symmetrised at load.
 # Profiles NOT listed as opposites are treated as "too close to use as a clean
-# negative" (e.g. hypnotic-rolling vs peak-time-dark-techno overlap heavily).
+# negative" (e.g. deep house vs tech house overlap heavily).
 # Edit freely — this is the one piece of hand-tuning the system relies on.
 # Keyed on the LOCKED vocabulary (TAG-VOCAB-DESIGN.md). Opposites are declared
 # ONLY WITHIN a layer — never across. A track's set-role (functional) and its
@@ -65,6 +65,12 @@ _OPPOSING_PROFILES_DECL: dict[str, tuple[str, ...]] = {
     # ── personal (listening moment) ──
     "gym": ("wind-down", "deep-listen", "focus-work"),
     "pre-night-out": ("wind-down", "focus-work"),
+    # ── era (production vibe) — each decade opposes its NON-neighbours only;
+    #    adjacent decades are never opponents (the 80s/90s blur is real, and
+    #    modern is 00s-adjacent). Declared one direction; symmetrised at load. ──
+    "70s-sound": ("90s-sound", "00s-sound", "modern"),
+    "80s-sound": ("00s-sound", "modern"),
+    "90s-sound": ("modern",),
 }
 
 

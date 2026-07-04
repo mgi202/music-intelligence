@@ -82,6 +82,45 @@ def _titlecase_tag(tag: str) -> str:
     return " ".join(w.capitalize() for w in (tag or "").split())
 
 
+def _release_year(release_date: str | None) -> int | None:
+    """First 4 digits of an ISO-ish release date, or None."""
+    if release_date and len(release_date) >= 4 and release_date[:4].isdigit():
+        return int(release_date[:4])
+    return None
+
+
+# Weak era evidence from hidden decade tags (Last.fm's 80s/90s folksonomy).
+# Used ONLY when the track has no release year, and only for the prefill —
+# never as suggestion chips (the handoff's explicit constraint).
+_DECADE_TAG_ERA = {
+    "80s": "80s-sound", "1980s": "80s-sound", "80's": "80s-sound", "80 s": "80s-sound",
+    "90s": "90s-sound", "1990s": "90s-sound", "90's": "90s-sound",
+}
+
+
+def _era_prefill(year: int | None, raw_tags: list[dict]) -> str | None:
+    """The Review card's era prefill (CARD-WEIGHT RULE: confirm-or-correct,
+    never choose-from-five). Release decade wins; hidden Last.fm decade tags
+    are the weak fallback; anything pre-1970 gets no claim."""
+    if year is not None:
+        if 1970 <= year <= 1979:
+            return "70s-sound"
+        if 1980 <= year <= 1989:
+            return "80s-sound"
+        if 1990 <= year <= 1999:
+            return "90s-sound"
+        if 2000 <= year <= 2009:
+            return "00s-sound"
+        if year >= 2010:
+            return "modern"
+        return None
+    for tt in raw_tags:
+        era = _DECADE_TAG_ERA.get((tt["tag"] or "").lower().strip())
+        if era:
+            return era
+    return None
+
+
 # Eligibility shared by both lenses. The functional/personal private_manual
 # exclusion means "the micro-questions are already answered for this track".
 # "Later" is a deferral, not a black hole (R6): a skip auto-returns after 14
@@ -123,6 +162,7 @@ def build_queue(limit: int = 20, db_path: str | None = None,
 
     Returns {"tracks": [...], "meta": {...}}. Each track dict:
       pk, title, artist, album, video_id (for the IFrame), playback_video_id,
+      release_year, era_prefill (the Era row's confirm-or-correct preselect),
       personal_rating, blocked_from_playlists, do_not_recommend,
       tags (effective), playlists (source-playlist chips), suggestions.
     Each suggestion: {profile_id, tag_name, taxonomy_layer, score, evidence[]}.
@@ -174,6 +214,7 @@ def build_queue(limit: int = 20, db_path: str | None = None,
             SELECT t.track_pk, t.canonical_title, t.canonical_artist, t.album_title,
                    t.ytm_track_id, t.playback_video_id, t.created_at, t.duration_ms,
                    t.personal_rating, t.blocked_from_playlists, t.do_not_recommend,
+                   t.release_date,
                    LOWER(COALESCE(t.normalized_artist, t.canonical_artist)) AS artist_key
             FROM tracks t
             WHERE {eligibility}
@@ -255,10 +296,14 @@ def build_queue(limit: int = 20, db_path: str | None = None,
             pk = c["track_pk"]
             artist_key = c["artist_key"] or ""
 
-            # profile -> supporting public tag rows
+            # profile -> supporting public tag rows. Era profiles are excluded
+            # by design: era is confirm-or-correct via the prefilled card row,
+            # never a suggestion chip (decade tags are hidden, weak evidence).
             prof_support: dict[str, list[dict]] = {}
             for tt in public_tags[pk]:
                 for pid in tag_index.get(_norm(tt["tag"]), set()):
+                    if profile_layer.get(pid) == "era":
+                        continue
                     prof_support.setdefault(pid, []).append(tt)
 
             base_score = 0
@@ -285,6 +330,7 @@ def build_queue(limit: int = 20, db_path: str | None = None,
             suggestions.sort(key=lambda s: s["score"], reverse=True)
             suggestions = suggestions[:3]
 
+            year = _release_year(c["release_date"])
             scored.append({
                 "pk": pk,
                 "title": c["canonical_title"],
@@ -293,6 +339,8 @@ def build_queue(limit: int = 20, db_path: str | None = None,
                 "video_id": c["playback_video_id"] or c["ytm_track_id"],
                 "playback_video_id": c["playback_video_id"],
                 "duration_ms": c["duration_ms"],
+                "release_year": year,
+                "era_prefill": _era_prefill(year, public_tags[pk]),
                 "personal_rating": c["personal_rating"],
                 "blocked_from_playlists": c["blocked_from_playlists"],
                 "do_not_recommend": c["do_not_recommend"],

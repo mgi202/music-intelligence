@@ -862,8 +862,8 @@ async function rate(pk, rating) {
 }
 
 // Layer display order + labels for the tap-palette.
-const LAYER_ORDER = ["subgenre", "functional", "personal", "family"];
-const LAYER_LABEL = { subgenre: "Subgenre", functional: "Function (set role)", personal: "Personal", family: "Family" };
+const LAYER_ORDER = ["subgenre", "functional", "personal", "family", "era"];
+const LAYER_LABEL = { subgenre: "Subgenre", functional: "Function (set role)", personal: "Personal", family: "Family", era: "Era (sounds like)" };
 
 async function addTag(pk) {
   if (!state.allTags.length) { try { state.allTags = await api("/api/tags"); } catch (e) {} }
@@ -1351,7 +1351,7 @@ const RATING_OPTS = [
 ];
 const FACET_LAYERS = [
   ["family", "Family"], ["subgenre", "Subgenre"], ["functional", "Functional"],
-  ["personal", "Personal"], ["other", "Other"],
+  ["personal", "Personal"], ["era", "Era"], ["other", "Other"],
 ];
 
 // Name kept from the chip era — every tag-mutation path already calls this.
@@ -2032,6 +2032,7 @@ async function loadTraining() {
 
 const VQ_FKEYS = ["q", "w", "e", "r", "t", "y", "u", "i"];   // functional chips, set order
 const VQ_PKEYS = ["a", "s", "d", "f", "g", "h", "j"];        // personal chips, display order
+const VQ_EKEYS = ["7", "8", "9", "0", "-"];                  // era chips — number row, decade order
 
 async function loadVerdict() {
   const el = $("review");
@@ -2111,7 +2112,10 @@ function renderVerdict() {
     return;
   }
   const t = state.vq[state.vqIndex];
-  if (!t._sel) t._sel = { func: null, personal: new Set(), accepted: new Set(), rejected: new Set() };
+  // Era arrives PREFILLED from the release decade (CARD-WEIGHT RULE:
+  // confirm-or-correct, never choose-from-five). Committing the card confirms
+  // it; clearing the chip = no era claim.
+  if (!t._sel) t._sel = { func: null, personal: new Set(), era: t.era_prefill || null, accepted: new Set(), rejected: new Set() };
   state.vqRevealed = false;
 
   const existing = (t.tags || []).map(g =>
@@ -2152,6 +2156,12 @@ function renderVerdict() {
     `<span class="vq-chip ${t._sel.func === p.tag_name ? "on" : ""}" title="${esc(p.description || "")}" onclick="vqPickFunc('${esc(p.tag_name)}')"><kbd class="vqk">${VQ_FKEYS[i] || ""}</kbd>${esc(p.tag_name)}</span>`).join("");
   const persChips = vqProfilesByLayer("personal").map((p, i) =>
     `<span class="vq-chip ${t._sel.personal.has(p.tag_name) ? "on" : ""}" title="${esc(p.description || "")}" onclick="vqTogglePersonal('${esc(p.tag_name)}')"><kbd class="vqk">${VQ_PKEYS[i] || ""}</kbd>${esc(p.tag_name)}</span>`).join("");
+  const eraChips = vqProfilesByLayer("era").map((p, i) =>
+    `<span class="vq-chip ${t._sel.era === p.tag_name ? "on" : ""}" title="${esc(p.description || "")}" onclick="vqPickEra('${esc(p.tag_name)}')"><kbd class="vqk">${VQ_EKEYS[i] || ""}</kbd>${esc(p.tag_name)}</span>`).join("");
+  const eraHint = t.era_prefill
+    ? (t.release_year ? `prefilled from ${t.release_year} — correct if vibe ≠ date, tap again to clear`
+                      : "prefilled from weak evidence — correct or tap again to clear")
+    : "single · sounds-like, not release date · optional";
 
   const r = t.personal_rating || 0;
   const ratingStars = [1, 2, 3, 4].map(i =>
@@ -2195,6 +2205,9 @@ function renderVerdict() {
         <div class="vq-chips">${persChips}</div>
       </div>
     </div>
+
+    ${eraChips ? `<div class="vq-seclbl">Era? <span class="vq-skiphint">${esc(eraHint)}</span></div>
+    <div class="vq-chips">${eraChips}</div>` : ""}
 
     ${suggBlock}
 
@@ -2367,11 +2380,20 @@ function vqTogglePersonal(tag) {
   if (t._sel.personal.has(tag)) t._sel.personal.delete(tag); else t._sel.personal.add(tag);
   renderVerdict();
 }
+function vqPickEra(tag) {
+  // Single-select toggle. _eraTouched marks a deliberate era verdict — an
+  // UNTOUCHED prefill never counts as input (no free ride past the empty-
+  // commit trap), but it IS committed alongside real input (confirm-or-correct).
+  const t = vqCard();
+  t._sel.era = (t._sel.era === tag) ? null : tag;
+  t._eraTouched = true;
+  renderVerdict();
+}
 
 // Anything counts as input — a rating alone is a valid commit (R7).
 function vqInputMade(t) {
   return !!(t._sel.func || t._sel.personal.size || t._sel.accepted.size
-            || t._sel.rejected.size || t._ratedThisCard);
+            || t._sel.rejected.size || t._ratedThisCard || t._eraTouched);
 }
 
 async function vqCommit() {
@@ -2383,6 +2405,7 @@ async function vqCommit() {
   const tags = [];
   if (t._sel.func) tags.push(t._sel.func);
   t._sel.personal.forEach(x => tags.push(x));
+  if (t._sel.era) tags.push(t._sel.era);   // prefill-or-corrected — commit confirms it
   try {
     for (const tag of tags) {
       await api(`/api/tracks/${t.pk}/tags`, { method: "POST", body: JSON.stringify({ tag }) });
@@ -2576,6 +2599,7 @@ function vqTickClock() {
 // Keyboard (R3): full coverage — chips included. Review view only; never while
 // typing or with a modal open.
 //   q w e r t y u i = functional chips (set order) · a s d f g h j = personal
+//   7 8 9 0 - = era chips (70s/80s/90s/00s/modern — the number-row run)
 //   z/x/c/v = 1–4★ · 1/2/3 accept · ⇧1/2/3 reject · n = not for me · m = later
 //   b = reveal (guess-first) · space = play/pause · ⏎ = commit
 //   ←/→ = ±30s · ↑/↓ = quarter jumps
@@ -2595,6 +2619,12 @@ document.addEventListener("keydown", (e) => {
   if (digit !== undefined) {
     e.preventDefault();
     if (e.shiftKey) vqReject(digit); else vqAccept(digit);
+    return;
+  }
+  const eraIdx = { Digit7: 0, Digit8: 1, Digit9: 2, Digit0: 3, Minus: 4 }[e.code];
+  if (eraIdx !== undefined && !e.shiftKey) {
+    const p = vqProfilesByLayer("era")[eraIdx];
+    if (p) { e.preventDefault(); vqPickEra(p.tag_name); }
     return;
   }
   if (e.shiftKey) return;

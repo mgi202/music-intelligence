@@ -130,6 +130,77 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tag_profiles ADD COLUMN sort_order INTEGER")
         print("Migration applied: tag_profiles.sort_order")
 
+    # 2026-07-04 (vocab lock): new taxonomy layer 'era'. SQLite can't ALTER a
+    # CHECK in place, so rebuild tag_profiles with the widened constraint.
+    # Guarded on the stored DDL not already mentioning 'era' (fresh DBs get it
+    # from schema.sql). foreign_keys must be OFF for the rebuild — with it ON,
+    # DROP TABLE would fire the ON DELETE CASCADE on reference_track_labels /
+    # classification_results and silently destroy training data. Explicit
+    # column lists keep the copy correct on prod, where sort_order was ALTERed
+    # in at a different position than schema.sql declares.
+    tp_ddl = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='tag_profiles'"
+    ).fetchone()
+    if tp_ddl and tp_ddl["sql"] and "'era'" not in tp_ddl["sql"]:
+        conn.commit()  # PRAGMA foreign_keys is a no-op inside a transaction
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.executescript(
+            """
+            CREATE TABLE tag_profiles_new (
+                profile_id          TEXT PRIMARY KEY,
+                tag_name            TEXT NOT NULL UNIQUE,
+                description         TEXT,
+                taxonomy_layer      TEXT NOT NULL CHECK (taxonomy_layer IN (
+                    'family', 'subgenre', 'functional', 'personal', 'era'
+                )),
+                bpm_min             REAL,
+                bpm_max             REAL,
+                energy_min          REAL,
+                energy_max          REAL,
+                valence_min         REAL,
+                valence_max         REAL,
+                positive_prompt     TEXT,
+                negative_prompt     TEXT,
+                context_terms_json  TEXT,
+                sort_order          INTEGER,
+                created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO tag_profiles_new
+                (profile_id, tag_name, description, taxonomy_layer,
+                 bpm_min, bpm_max, energy_min, energy_max,
+                 valence_min, valence_max,
+                 positive_prompt, negative_prompt, context_terms_json,
+                 sort_order, created_at, updated_at)
+            SELECT
+                 profile_id, tag_name, description, taxonomy_layer,
+                 bpm_min, bpm_max, energy_min, energy_max,
+                 valence_min, valence_max,
+                 positive_prompt, negative_prompt, context_terms_json,
+                 sort_order, created_at, updated_at
+            FROM tag_profiles;
+            DROP TABLE tag_profiles;
+            ALTER TABLE tag_profiles_new RENAME TO tag_profiles;
+            """
+        )
+        # Only the two children that reference tag_profiles — a whole-DB check
+        # could trip on unrelated pre-existing rows and wrongly abort init.
+        # (Guard on existence: a partially-migrated DB may not have both yet.)
+        violations = []
+        for child in ("reference_track_labels", "classification_results"):
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (child,)
+            ).fetchone():
+                violations += conn.execute(
+                    f"PRAGMA foreign_key_check({child})"
+                ).fetchall()
+        conn.execute("PRAGMA foreign_keys = ON")
+        if violations:
+            raise RuntimeError(
+                f"tag_profiles rebuild left {len(violations)} FK violations — aborting"
+            )
+        print("Migration applied: tag_profiles.taxonomy_layer CHECK widened for 'era'")
+
     # playlist_rules: sync-safety columns (v3)
     pr_cols = {row["name"] for row in conn.execute("PRAGMA table_info(playlist_rules)")}
     if pr_cols and "last_synced_hash" not in pr_cols:
@@ -217,6 +288,22 @@ def _run_backfills(conn: sqlite3.Connection, db_path: str | None = None) -> None
             )
     except Exception as e:  # never block init on reconcile
         print(f"tag_profiles reconcile skipped: {e}")
+
+    # 2026-07-04 (vocab lock): enforce the locked alias/hide rulings and
+    # chain-flatten alias targets (the effective view folds one level only).
+    try:
+        from app.tags.vocab_lock import reconcile_tag_vocabulary
+        vsummary = reconcile_tag_vocabulary(db_path)
+        if any(vsummary[k] for k in ("aliases_set", "hides_set", "chains_flattened")):
+            print(
+                f"Reconciled tag_vocabulary: {vsummary['aliases_set']} aliases, "
+                f"{vsummary['hides_set']} hides, "
+                f"{vsummary['chains_flattened']} chains flattened"
+            )
+        if vsummary["cycles"]:
+            print(f"WARNING: alias cycles left untouched: {vsummary['cycles']}")
+    except Exception as e:  # never block init on curation seed
+        print(f"tag_vocabulary reconcile skipped: {e}")
 
     rows = conn.execute(
         "SELECT track_pk, ytm_track_id, isrc FROM tracks "
