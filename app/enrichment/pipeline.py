@@ -86,7 +86,7 @@ def run_pipeline(
                 SELECT t.track_pk, t.canonical_title, t.canonical_artist,
                        t.normalized_title, t.normalized_artist,
                        t.isrc, t.duration_ms, t.musicbrainz_recording_id,
-                       t.bandcamp_url
+                       t.bandcamp_url, t.release_date
                 FROM tracks t
                 LEFT JOIN enrichment_state es ON es.track_pk = t.track_pk
                 WHERE (t.match_status = 'metadata_only'
@@ -104,7 +104,7 @@ def run_pipeline(
                 SELECT track_pk, canonical_title, canonical_artist,
                        normalized_title, normalized_artist,
                        isrc, duration_ms, musicbrainz_recording_id,
-                       bandcamp_url
+                       bandcamp_url, release_date
                 FROM tracks
                 WHERE track_pk IN ({','.join('?' * len(track_pks))})
             """, track_pks).fetchall()
@@ -173,6 +173,10 @@ def _enrich_track(track: dict, db_path: str | None) -> str:
                 if mb_result.isrc and not isrc:
                     updates["isrc"] = mb_result.isrc
                     isrc = mb_result.isrc
+                # Era layer input: ingested dates (CSV) win over MB search
+                # results, so only fill the gap, never overwrite.
+                if mb_result.release_date and not track.get("release_date"):
+                    updates["release_date"] = mb_result.release_date
                 if updates:
                     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
                     set_clause = ", ".join(f"{k} = ?" for k in updates)

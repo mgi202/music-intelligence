@@ -116,15 +116,16 @@ def _parse_recording(rec: dict, confidence: float) -> MusicBrainzResult:
     isrc_list = rec.get("isrc-list", [])
     isrc = isrc_list[0] if isrc_list else None
 
-    # Release date / album / labels from first release (best-effort; no extra calls)
-    release_date = None
+    # Release date / album / labels from release-list (best-effort; no extra
+    # calls). Date is the EARLIEST across releases — the list is not in
+    # chronological order, and the era layer wants the original release year,
+    # not a reissue's.
+    release_date = _earliest_release_date(rec.get("release-list", []))
     album_title = None
     labels: list[dict] = []
     releases = rec.get("release-list", [])
     if releases:
-        first_release = releases[0]
-        release_date = first_release.get("date")
-        album_title = first_release.get("title")
+        album_title = releases[0].get("title")
     seen_labels: set[str] = set()
     for rel in releases:
         for li in rel.get("label-info-list", []) or rel.get("label-info", []):
@@ -151,6 +152,24 @@ def _parse_recording(rec: dict, confidence: float) -> MusicBrainzResult:
         artist_credits=artist_credits,
         labels=labels,
     )
+
+
+def _earliest_release_date(releases: list[dict]) -> str | None:
+    """Earliest dated release ("1991", "1991-05" or "1991-05-21")."""
+    dates = [r.get("date") for r in releases or []]
+    dates = [d for d in dates if d and len(d) >= 4 and d[:4].isdigit()]
+    return min(dates) if dates else None
+
+
+def lookup_release_date(recording_id: str) -> str | None:
+    """Earliest release date for a known recording MBID.
+
+    Used by the release-date backfill; raises on API failure so callers can
+    count errors and keep going."""
+    mb = _init_mb()
+    time.sleep(_RATE_LIMIT)
+    result = mb.get_recording_by_id(recording_id, includes=["releases"])
+    return _earliest_release_date(result.get("recording", {}).get("release-list", []))
 
 
 def _score_best_match(
