@@ -31,6 +31,9 @@ from app.ingestion.normalise import normalise_artist, normalise_title, _unicode_
 _LB_BASE = "https://api.listenbrainz.org/1"
 _PAGE_COUNT = 100
 _CROSS_SOURCE_DEDUP_WINDOW_S = 30 * 60  # ±30 min — collapse the same play across sources
+_YTM_HISTORY_RELISTEN_WINDOW_S = 24 * 3600  # same key won't re-insert within a day
+_YTM_HISTORY_RETRIES = 2
+_YTM_HISTORY_RETRY_SLEEP_S = 5
 
 _LASTFM_BASE = "https://ws.audioscrobbler.com/2.0/"
 _LASTFM_PAGE_COUNT = 200
@@ -303,48 +306,122 @@ def _insert_lastfm_listen(conn: sqlite3.Connection, tr: dict) -> bool:
     return cur.rowcount > 0
 
 
+def _ytm_item_fields(item: dict) -> tuple[str | None, str, str]:
+    """Extract (recording_msid, title, artist_name) for one history item."""
+    video_id = item.get("videoId")
+    title = (item.get("title") or "").strip()
+    artists = item.get("artists") or []
+    artist_name = ", ".join(
+        a.get("name", "") for a in artists if isinstance(a, dict) and a.get("name")
+    )
+    msid = f"ytm:{video_id}" if video_id else None
+    return msid, title, artist_name
+
+
+def _ytm_key(msid: str | None, title: str, artist_name: str) -> str:
+    """Stable identity for a history item: videoId when present, else metadata."""
+    return msid if msid else f"meta:{title}|{artist_name}"
+
+
+def _ytm_key_seen_since(
+    conn: sqlite3.Connection, msid: str | None, title: str, artist_name: str, since_ts: int
+) -> bool:
+    """True if a ytm_history listen with this identity exists at/after since_ts."""
+    if msid:
+        row = conn.execute(
+            "SELECT 1 FROM listens WHERE source = 'ytm_history' "
+            "AND recording_msid = ? AND listened_at >= ? LIMIT 1",
+            (msid, since_ts),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT 1 FROM listens WHERE source = 'ytm_history' "
+            "AND recording_msid IS NULL AND track_name = ? AND artist_name = ? "
+            "AND listened_at >= ? LIMIT 1",
+            (title, artist_name, since_ts),
+        ).fetchone()
+    return row is not None
+
+
 def import_ytm_history(
     adapter,
     db_path: str | None = None,
 ) -> int:
     """Import YTM watch history (RC2 §T6.2) as best-effort seed listens.
 
-    YTM history has no timestamps, so each row is stamped at import time and
-    deduped against any existing listen for the same track within ±30 minutes
-    from either source. Returns rows inserted.
+    YTM history is a most-recent-first list with no timestamps that already
+    de-duplicates plays (a replay moves the item to the top rather than adding
+    a row). So only items ABOVE the previously imported head are new plays:
+    we walk the list top-down and stop at the last-imported item's identity
+    key (videoId msid, else title|artist). Rows are stamped at import time.
+
+    Two guards apply to every candidate, resolved or not:
+      - the same key never re-inserts within 24h (covers the first pass after
+        a gap and the head-fell-off-the-list fallback, where the stop-marker
+        is missing and the whole list is scanned);
+      - a resolved track with any listen within ±30 min from another source
+        is skipped (cross-source double-count).
+
+    Returns rows inserted. Transient fetch errors are retried once, then
+    swallowed (best-effort seed, never fatal).
     """
-    try:
-        history = adapter.client.get_history() or []
-    except Exception as e:  # noqa: BLE001 — best-effort seed, never fatal
-        print(f"Warning: get_history failed: {e}")
-        return 0
+    history = None
+    for attempt in range(1, _YTM_HISTORY_RETRIES + 1):
+        try:
+            history = adapter.client.get_history() or []
+            break
+        except Exception as e:  # noqa: BLE001 — best-effort seed, never fatal
+            if attempt < _YTM_HISTORY_RETRIES:
+                time.sleep(_YTM_HISTORY_RETRY_SLEEP_S)
+                continue
+            print(f"Warning: get_history failed: {e}")
+            return 0
 
     now_ts = int(datetime.now(timezone.utc).timestamp())
     inserted = 0
     with db_conn(db_path) as conn:
+        # Identity key of the most recently imported history item — the stop
+        # marker for the top-down scan. None on the very first import.
+        head_row = conn.execute(
+            "SELECT recording_msid, track_name, artist_name FROM listens "
+            "WHERE source = 'ytm_history' ORDER BY listen_id DESC LIMIT 1"
+        ).fetchone()
+        prev_head_key = (
+            _ytm_key(head_row["recording_msid"], head_row["track_name"] or "",
+                     head_row["artist_name"] or "")
+            if head_row else None
+        )
+
+        new_items = []
         for item in history:
-            video_id = item.get("videoId")
-            title = (item.get("title") or "").strip()
-            artists = item.get("artists") or []
-            artist_name = ", ".join(
-                a.get("name", "") for a in artists if isinstance(a, dict) and a.get("name")
-            )
+            msid, title, artist_name = _ytm_item_fields(item)
             if not title:
+                continue
+            if prev_head_key is not None and _ytm_key(msid, title, artist_name) == prev_head_key:
+                break
+            new_items.append((item, msid, title, artist_name))
+
+        # Insert oldest-first so the newest play ends up with the highest
+        # listen_id and becomes the next pass's stop marker.
+        for item, msid, title, artist_name in reversed(new_items):
+            if _ytm_key_seen_since(
+                conn, msid, title, artist_name, now_ts - _YTM_HISTORY_RELISTEN_WINDOW_S
+            ):
                 continue
 
             # Resolve via ytm alias first, then metadata.
             track_pk = None
-            if video_id:
+            if msid:
                 row = conn.execute(
                     "SELECT track_pk FROM track_aliases WHERE alias_key = ?",
-                    (f"ytm:{video_id}",),
+                    (msid,),
                 ).fetchone()
                 if row:
                     track_pk = row["track_pk"]
             if track_pk is None:
                 track_pk = resolve_track_pk(conn, None, title, artist_name)
 
-            # Dedup: skip if a listen for the same track exists within ±30 min.
+            # Cross-source dedup: same resolved track within ±30 min.
             if track_pk is not None and conn.execute(
                 "SELECT 1 FROM listens WHERE track_pk = ? "
                 "AND ABS(listened_at - ?) <= ? LIMIT 1",
@@ -359,8 +436,7 @@ def import_ytm_history(
                      artist_name, raw_json, source)
                 VALUES (?, ?, ?, ?, ?, ?, 'ytm_history')
                 """,
-                (now_ts, track_pk, f"ytm:{video_id}" if video_id else None,
-                 title, artist_name, json.dumps(item)),
+                (now_ts, track_pk, msid, title, artist_name, json.dumps(item)),
             )
             if cur.rowcount > 0:
                 inserted += 1
