@@ -156,12 +156,17 @@ def assemble(db_path: str | None = None, now_utc: datetime | None = None) -> tup
     except Exception:  # noqa: BLE001
         pass
 
-    # ── Tag-frequency movers (Job 8) ──
+    # ── Tag-frequency + vocab expansion (Job 8, revived 2026-07-05) ──
     try:
         tf = _job_result("tag_frequency", night_date, db_path)
         if tf and tf.get("movers"):
             movers = ", ".join(f"{t} +{d}" for t, d in tf["movers"][:3])
             lines.append(f"Tag movers: {movers}")
+        if tf and (tf.get("suggestions_pending") or tf.get("suggestions_new")):
+            lines.append(
+                f"Vocab suggestions: +{tf.get('suggestions_new', 0)} new · "
+                f"{tf.get('suggestions_pending', 0)} awaiting review (Tags tab)"
+            )
     except Exception:  # noqa: BLE001
         pass
 

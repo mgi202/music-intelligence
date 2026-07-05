@@ -446,6 +446,19 @@ def search_version_candidates(track_pk: str):
     return {"track_pk": track_pk, "candidates": candidates}
 
 
+@app.post("/api/tracks/{track_pk}/video-candidates/search")
+def search_video_candidates(track_pk: str):
+    """On-demand: search YTM for this track's real official video (incl.
+    remix/VIP variant videos), score, persist, and (if it beats the current
+    counterpart at ≥0.92 + gates) auto-apply to official_video_id."""
+    from app.enrichment import version_discovery
+    try:
+        candidates = version_discovery.discover_videos_for_track(track_pk, force=True)
+    except ValueError:
+        raise HTTPException(404, "Track not found")
+    return {"track_pk": track_pk, "candidates": candidates}
+
+
 @app.get("/api/version-candidates")
 def list_version_candidates(status: str = Query("pending"), limit: int = Query(200, le=1000)):
     """Review queue — candidates in a given status, joined to track identity.
@@ -457,7 +470,7 @@ def list_version_candidates(status: str = Query("pending"), limit: int = Query(2
                       c.candidate_channel, c.candidate_duration_ms, c.result_type,
                       c.title_similarity, c.artist_similarity, c.duration_score,
                       c.keyword_score, c.uploader_score, c.veto_reason,
-                      c.confidence, c.status, c.discovered_at,
+                      c.confidence, c.kind, c.status, c.discovered_at,
                       t.canonical_title, t.canonical_artist, t.duration_ms
                  FROM playback_version_candidates c
                  JOIN tracks t ON t.track_pk = c.track_pk
@@ -598,25 +611,104 @@ def list_all_tags():
 @app.get("/api/vocabulary")
 def list_vocabulary():
     """Every distinct raw tag in the library with its curation state. Hidden tags
-    are still listed here (so they can be un-hidden) — unlike /api/tags."""
+    are still listed here (so they can be un-hidden) — unlike /api/tags.
+    `layer` is set when the tag IS a vocabulary profile (badge in the Tags
+    tab); `manual` marks tags Matthias applied by hand on ≥1 track."""
     conn = get_connection()
     try:
         rows = conn.execute(
             """SELECT LOWER(tt.tag) AS tag,
                       COUNT(DISTINCT tt.track_pk) AS n,
                       COALESCE(v.hidden, 0) AS hidden,
-                      v.alias_to AS alias_to
+                      v.alias_to AS alias_to,
+                      MIN(p.taxonomy_layer) AS layer,
+                      MAX(tt.tag_type = 'private_manual') AS manual
                FROM track_tags tt
                LEFT JOIN tag_vocabulary v ON v.tag = LOWER(tt.tag)
+               LEFT JOIN tag_profiles p ON LOWER(p.tag_name) = LOWER(tt.tag)
                GROUP BY LOWER(tt.tag)
                ORDER BY n DESC, tag"""
         ).fetchall()
         return [
-            {"tag": r["tag"], "n": r["n"], "hidden": bool(r["hidden"]), "alias_to": r["alias_to"]}
+            {"tag": r["tag"], "n": r["n"], "hidden": bool(r["hidden"]),
+             "alias_to": r["alias_to"], "layer": r["layer"],
+             "manual": bool(r["manual"])}
             for r in rows
         ]
     finally:
         conn.close()
+
+
+@app.get("/api/vocabulary/profiles")
+def list_vocabulary_profiles():
+    """The locked + user-approved vocabulary, grouped for the Tags tab's
+    read-only section: name, definition, layer, origin, live usage count
+    (effective tags — what filtering/playlists actually see)."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT p.profile_id, p.tag_name, p.description, p.taxonomy_layer,
+                      p.sort_order, p.origin,
+                      (SELECT COUNT(DISTINCT e.track_pk)
+                       FROM effective_track_tags e
+                       WHERE e.tag = LOWER(p.tag_name)) AS n
+               FROM tag_profiles p
+               ORDER BY CASE p.taxonomy_layer
+                            WHEN 'functional' THEN 0 WHEN 'personal' THEN 1
+                            WHEN 'family' THEN 2 WHEN 'subgenre' THEN 3
+                            ELSE 4 END,
+                        p.sort_order, p.tag_name"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ─────────────────────────────────────────
+# Vocabulary suggestions (dynamic subgenre expansion, 2026-07-05)
+# ─────────────────────────────────────────
+
+@app.get("/api/vocab-suggestions")
+def vocab_suggestions(status: str = Query("pending")):
+    """The suggestions queue — subgenre candidates the nightly extraction
+    proposed within each family's tier quota. Approve/reject is one tap."""
+    from app.tags import vocab_expansion
+    return {"status": status,
+            "suggestions": vocab_expansion.list_suggestions(status)}
+
+
+@app.post("/api/vocab-suggestions/recompute")
+def vocab_suggestions_recompute():
+    """On-demand extraction (the Tags tab's "Scan library now" button) — the
+    same computation the nightly job runs. Safe to tap repeatedly: decided
+    tags never resurface, pending ones just refresh their counts."""
+    from app.tags import vocab_expansion
+    return vocab_expansion.compute_suggestions()
+
+
+@app.post("/api/vocab-suggestions/{suggestion_id}/approve")
+def approve_vocab_suggestion(suggestion_id: int):
+    """Promote into the vocabulary: subgenre profile (origin='user_approved',
+    survives reconcile) + alias-row removal when it was folded away."""
+    from app.tags import vocab_expansion
+    try:
+        return vocab_expansion.approve_suggestion(suggestion_id)
+    except ValueError:
+        raise HTTPException(404, "Suggestion not found")
+    except LookupError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/api/vocab-suggestions/{suggestion_id}/reject")
+def reject_vocab_suggestion(suggestion_id: int):
+    """Sticky reject — the tag is never proposed again."""
+    from app.tags import vocab_expansion
+    try:
+        return vocab_expansion.reject_suggestion(suggestion_id)
+    except ValueError:
+        raise HTTPException(404, "Suggestion not found")
+    except LookupError as e:
+        raise HTTPException(409, str(e))
 
 
 @app.put("/api/vocabulary/{tag}")

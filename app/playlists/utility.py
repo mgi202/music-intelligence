@@ -237,9 +237,11 @@ def seed_example_rules(
 # Locked tag vocabulary (TAG-VOCAB-DESIGN.md).
 #
 # Functional (8) + personal (7) LOCKED 2026-07-02; family (11) + subgenre (24)
-# + era (5) LOCKED 2026-07-03 — 55 profiles total, the FINAL budget (amended
-# 50→55 to admit the era layer; any future addition must name the tag it
-# replaces). Naming happens there, once — never per-track.
+# + era (5) LOCKED 2026-07-03 — 55 locked profiles. The hard 55 cap was
+# RETIRED 2026-07-04: subgenre additions now arrive dynamically via the
+# vocabulary-suggestions queue (app/tags/vocab_expansion.py, per-family tier
+# quotas) as origin='user_approved' DB rows. Renames + deletions of anything
+# below stay code-locked HERE (label-preserving migration path only).
 #
 # descriptions are copied verbatim from TAG-VOCAB-DESIGN.md (or written in its
 # voice for family/subgenre/era) so the FE renders each chip's definition as a
@@ -557,15 +559,19 @@ def reconcile_tag_profiles(db_path: str | None = None) -> dict:
          that already exist so definition edits reach the FE.
       3. Drop leftover non-locked profiles (e.g. melodic-late-night) ONLY when
          they carry no reference labels — never silently discard training data.
+         Profiles with origin='user_approved' (vocabulary-suggestions queue,
+         2026-07-05) are ALWAYS kept: additions are DB-authoritative now;
+         only renames/deletions stay code-locked here.
 
     Returns a summary dict {renamed, inserted, refreshed, dropped, kept_with_labels,
-    labels_migrated}.
+    kept_user_approved, labels_migrated}.
     """
     now = datetime.now(timezone.utc).isoformat()
     target_ids = {p["profile_id"] for p in LOCKED_TAG_PROFILES}
     result = {
         "renamed": [], "inserted": [], "refreshed": [],
-        "dropped": [], "kept_with_labels": [], "labels_migrated": 0,
+        "dropped": [], "kept_with_labels": [], "kept_user_approved": [],
+        "labels_migrated": 0,
     }
 
     with db_conn(db_path) as conn:
@@ -617,13 +623,20 @@ def reconcile_tag_profiles(db_path: str | None = None) -> dict:
             existing.discard(old_id)
             result["renamed"].append({"from": old_id, "to": new_id})
 
-        # 3. Drop any remaining non-locked profile, but only if label-free.
+        # 3. Drop any remaining non-locked profile, but only if label-free AND
+        # not user-approved. origin='user_approved' rows came through the
+        # vocabulary-suggestions queue (2026-07-05) — the vocabulary is
+        # DB-authoritative for additions, so reconcile must never drop them
+        # even when they carry no reference labels yet.
         leftovers = [
-            r["profile_id"] for r in
-            conn.execute("SELECT profile_id FROM tag_profiles").fetchall()
+            (r["profile_id"], r["origin"]) for r in
+            conn.execute("SELECT profile_id, origin FROM tag_profiles").fetchall()
             if r["profile_id"] not in target_ids
         ]
-        for pid in leftovers:
+        for pid, origin in leftovers:
+            if origin == "user_approved":
+                result["kept_user_approved"].append(pid)
+                continue
             has_labels = conn.execute(
                 "SELECT 1 FROM reference_track_labels WHERE profile_id = ? LIMIT 1",
                 (pid,),

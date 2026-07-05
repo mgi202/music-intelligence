@@ -137,6 +137,14 @@ CREATE TABLE IF NOT EXISTS playback_version_candidates (
     uploader_score          REAL DEFAULT 0.0,
     veto_reason             TEXT,                      -- non-NULL ⇒ confidence forced to 0
     confidence              REAL DEFAULT 0.0,
+    -- 2026-07-05 (video discovery): what the candidate is FOR.
+    -- 'extended' feeds tracks.playback_video_id (the original pipeline);
+    -- 'video' feeds tracks.official_video_id (prefer-videos toggle) — found
+    -- by the official-video/remix search, quality-checked against YTM's own
+    -- Song↔Video counterpart pairing.
+    kind                    TEXT NOT NULL DEFAULT 'extended' CHECK (kind IN (
+        'extended', 'video'
+    )),
     status                  TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
         'pending',        -- awaiting Matthias
         'auto_applied',   -- ≥0.92 + gates; wrote playback_video_id
@@ -240,9 +248,38 @@ CREATE TABLE IF NOT EXISTS tag_profiles (
     -- Display order within a taxonomy layer (2026-07-03): functional chips
     -- render in SET order (warm-up → closer), not alphabetically.
     sort_order          INTEGER,
+    -- 2026-07-05 (dynamic vocab expansion): where a profile came from.
+    -- 'locked' rows are code-authoritative (LOCKED_TAG_PROFILES — renames and
+    -- deletions stay there); 'user_approved' rows were added at runtime via
+    -- the vocabulary-suggestions queue and are DB-authoritative — reconcile
+    -- must never drop them.
+    origin              TEXT NOT NULL DEFAULT 'locked'
+                            CHECK (origin IN ('locked', 'user_approved')),
     created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ─────────────────────────────────────────
+-- Vocabulary-suggestions queue (2026-07-05 — dynamic subgenre expansion).
+-- The revived nightly tag-frequency job proposes subgenre candidates within
+-- each family's tier quota (app/tags/vocab_expansion.py); Matthias approves
+-- or rejects in the Tags tab. UNIQUE(tag) keeps a decision sticky — a
+-- rejected tag is never re-suggested however often the extraction re-runs.
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS vocab_suggestions (
+    suggestion_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+    tag            TEXT NOT NULL UNIQUE,      -- lower-cased candidate tag
+    family         TEXT,                      -- family assigned by co-occurrence
+    track_count    INTEGER NOT NULL DEFAULT 0,-- distinct tracks (refreshed while pending)
+    was_alias_to   TEXT,                      -- alias target when promoted from an alias row
+    status         TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+        'pending', 'approved', 'rejected'
+    )),
+    suggested_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    decided_at     TEXT,
+    updated_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_vocab_sugg_status ON vocab_suggestions(status);
 
 -- ─────────────────────────────────────────
 -- Reference track labels (Stage 1+; table created now for FK integrity)
@@ -284,6 +321,10 @@ CREATE TABLE IF NOT EXISTS enrichment_state (
     -- Nightly Bandcamp search sweep (2026-07-03): stamped when a search found
     -- no acceptable match. A missed track is not searched again for 30 days.
     bandcamp_search_missed_at   TEXT,
+    -- Official-video discovery (2026-07-05): stamped after the batch walk
+    -- searched this track, hit or miss, so the sweep never rescans it. The
+    -- on-demand dialog search (force) ignores the stamp.
+    video_searched_at           TEXT,
     metadata_confidence         REAL DEFAULT 0.0,
     audio_source_confidence     REAL DEFAULT 0.0,
     enrichment_tier             TEXT NOT NULL DEFAULT 'metadata_only' CHECK (enrichment_tier IN (

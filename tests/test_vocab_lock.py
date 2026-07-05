@@ -111,7 +111,17 @@ def test_era_check_migration_rebuilds_legacy_table_preserving_labels(db):
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         INSERT INTO tag_profiles_old
-            SELECT * FROM tag_profiles WHERE taxonomy_layer != 'era';
+            (profile_id, tag_name, description, taxonomy_layer,
+             bpm_min, bpm_max, energy_min, energy_max,
+             valence_min, valence_max,
+             positive_prompt, negative_prompt, context_terms_json,
+             sort_order, created_at, updated_at)
+            SELECT profile_id, tag_name, description, taxonomy_layer,
+                   bpm_min, bpm_max, energy_min, energy_max,
+                   valence_min, valence_max,
+                   positive_prompt, negative_prompt, context_terms_json,
+                   sort_order, created_at, updated_at
+            FROM tag_profiles WHERE taxonomy_layer != 'era';
         DROP TABLE tag_profiles;
         ALTER TABLE tag_profiles_old RENAME TO tag_profiles;
         """

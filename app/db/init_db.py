@@ -124,6 +124,12 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
             "ALTER TABLE enrichment_state ADD COLUMN bandcamp_search_missed_at TEXT"
         )
         print("Migration applied: enrichment_state.bandcamp_search_missed_at")
+
+    # 2026-07-05 (video discovery): batch-walk stamp — a track is searched for
+    # its official video once; the on-demand dialog search bypasses the stamp.
+    if es_cols and "video_searched_at" not in es_cols:
+        conn.execute("ALTER TABLE enrichment_state ADD COLUMN video_searched_at TEXT")
+        print("Migration applied: enrichment_state.video_searched_at")
     ms_cols = {row["name"] for row in conn.execute("PRAGMA table_info(metrics_snapshots)")}
     if ms_cols and "pass_type" not in ms_cols:
         conn.execute("ALTER TABLE metrics_snapshots ADD COLUMN pass_type TEXT")
@@ -207,6 +213,31 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
                 f"tag_profiles rebuild left {len(violations)} FK violations — aborting"
             )
         print("Migration applied: tag_profiles.taxonomy_layer CHECK widened for 'era'")
+
+    # 2026-07-05 (dynamic vocab expansion): profile origin. 'locked' rows are
+    # code-authoritative; 'user_approved' rows were added via the vocabulary-
+    # suggestions queue and must survive reconcile. Re-read columns — the era
+    # rebuild above may have just recreated the table.
+    tp_cols = {row["name"] for row in conn.execute("PRAGMA table_info(tag_profiles)")}
+    if tp_cols and "origin" not in tp_cols:
+        conn.execute(
+            "ALTER TABLE tag_profiles ADD COLUMN origin TEXT NOT NULL DEFAULT 'locked'"
+        )
+        print("Migration applied: tag_profiles.origin")
+
+    # 2026-07-05 (video discovery): candidate kind — 'extended' feeds
+    # playback_video_id (original pipeline), 'video' feeds official_video_id
+    # (prefer-videos toggle, quality-checked against YTM's counterpart).
+    pvc_cols = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(playback_version_candidates)")
+    }
+    if pvc_cols and "kind" not in pvc_cols:
+        conn.execute(
+            "ALTER TABLE playback_version_candidates "
+            "ADD COLUMN kind TEXT NOT NULL DEFAULT 'extended'"
+        )
+        print("Migration applied: playback_version_candidates.kind")
 
     # playlist_rules: sync-safety columns (v3)
     pr_cols = {row["name"] for row in conn.execute("PRAGMA table_info(playlist_rules)")}

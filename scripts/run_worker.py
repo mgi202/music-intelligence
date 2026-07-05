@@ -89,6 +89,12 @@ def _version_discovery_batch_size(pass_type: str) -> int:
     return int(os.getenv("VERSION_DISCOVERY_BATCH_SIZE", "25"))
 
 
+def _video_discovery_batch_size(pass_type: str) -> int:
+    if pass_type == "night":
+        return int(os.getenv("NIGHT_VIDEO_DISCOVERY_BATCH_SIZE", "100"))
+    return int(os.getenv("VIDEO_DISCOVERY_BATCH_SIZE", "10"))
+
+
 def _flag(name: str, default: str = "1") -> bool:
     return os.getenv(name, default).strip() not in ("0", "false", "no", "")
 
@@ -159,6 +165,22 @@ def run_pass(pass_type: str = "day") -> None:
         )
     except Exception as e:
         _alert("Version discovery", e)
+
+    # ── 2c. Official-video discovery (rated set, one-shot per track) ──
+    # Finds the REAL official video (incl. remix/feat. variant videos) and
+    # quality-checks YTM's Song↔Video counterpart pairing. Same review-gated
+    # discipline as 2b; kind='video' candidates feed official_video_id.
+    if _flag("VIDEO_DISCOVERY_ENABLED"):
+        try:
+            from app.enrichment.version_discovery import run_video_batch
+
+            vv = run_video_batch(limit=_video_discovery_batch_size(pass_type))
+            logger.info(
+                "Video discovery: %d scanned, %d auto-applied, %d pending, %d discarded",
+                vv["scanned"], vv["auto_applied"], vv["pending"], vv["discarded"],
+            )
+        except Exception as e:
+            _alert("Video discovery", e)
 
     # ── 3. Playlist sync ──
     try:
@@ -302,7 +324,8 @@ def run_night_jobs(night_date: str) -> None:
             _alert("Night job: dedup_scan", e)
             _record_job("dedup_scan", night_date, "error", {"error": str(e)})
 
-    # Job 8 — tag-frequency report regen (temporary, until vocab lock).
+    # Job 8 — tag frequency + vocabulary-expansion watch (revived 2026-07-05:
+    # recomputes family coverage vs tier quotas and tops up vocab_suggestions).
     if _flag("TAG_FREQ_NIGHTLY") and runs.should_run("tag_frequency", night_date):
         try:
             from app.jobs.tag_frequency import run_report

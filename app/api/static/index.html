@@ -310,6 +310,24 @@
   .vocab .vbtn { flex-shrink: 0; background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 5px 10px; border-radius: 8px; font-size: 12px; cursor: pointer; }
   .vocab .vbtn.on { background: var(--danger); color: #111; border-color: var(--danger); font-weight: 600; }
   .vocabsearch { width: 100%; background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 9px 12px; border-radius: var(--radius); font-size: 14px; outline: none; margin-bottom: 10px; }
+  .vocab .vlayer { flex-shrink: 0; font-size: 10px; padding: 1px 7px; border-radius: 999px; background: var(--panel2); color: var(--dim); border: 1px solid #2b2b38; text-transform: uppercase; letter-spacing: .5px; }
+  .vocab .vlayer.manual { color: var(--accent); border-color: #3a3a20; }
+
+  /* Vocabulary suggestions (dynamic subgenre expansion, 2026-07-05) */
+  .sugg { background: var(--panel); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 6px; display: flex; align-items: center; gap: 10px; border-left: 3px solid var(--accent); }
+  .sugg .sname { flex: 1; min-width: 0; font-size: 13.5px; }
+  .sugg .sname .sn { color: var(--dim); font-size: 11px; }
+  .sugg .sname .sfam { color: #6fb6d6; font-size: 11px; }
+  .sugg .sname .salias { color: var(--dim); font-size: 11px; font-style: italic; }
+  .sugg .sbtn { flex-shrink: 0; background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 6px 12px; border-radius: 8px; font-size: 12.5px; cursor: pointer; }
+  .sugg .sbtn.ok { background: #1d2c1d; border-color: #2f4c2f; color: #8fd18f; }
+  .vsec { margin: 18px 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--dim); }
+  .vsec:first-child { margin-top: 0; }
+  .vprof { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 4px; }
+  .vprof .vp { font-size: 11.5px; padding: 3px 10px; border-radius: 999px; background: var(--panel); border: 1px solid #2b2b38; color: var(--text); cursor: default; }
+  .vprof .vp .vpn { color: var(--dim); font-size: 10px; }
+  .vprof .vp.userok { border-color: #3a4c2f; }
+  .scanbtn { background: none; border: 1px dashed #3a3a48; color: var(--dim); padding: 6px 12px; border-radius: 8px; font-size: 12px; cursor: pointer; }
 
   /* ── Verdict Queue ── */
   .vq-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--dim); margin: 2px 2px 12px; }
@@ -725,6 +743,7 @@ async function versionDialog(pk) {
   bg.innerHTML = `<div class="sheet verdlg">
     <div class="menuhint">Playback version — ${esc(t.canonical_title || "")}</div>
     <button class="verbtn" id="ver-search">🔎 Search YTM for the extended version</button>
+    <button class="verbtn" id="ver-vsearch">🎬 Search for the official video</button>
     <div id="ver-results" class="verresults"></div>
     <div class="menusep"></div>
     <div class="menuhint">Or paste a link / videoId</div>
@@ -746,6 +765,19 @@ async function versionDialog(pk) {
       state.verCache = { pk, t, cands: data.candidates };
       renderVersionCandidates(res);
       reloadCurrent();  // an auto-apply may have set the version already
+    } catch (e) { res.innerHTML = `<div class="verhint">Search failed: ${esc(e.message)}</div>`; }
+  };
+  // Official-video discovery: quality-checks YTM's audio↔video pairing and
+  // finds videos living on remix/feat. variant tracks. Approving feeds the
+  // prefer-videos toggle (official_video_id), not the pinned version.
+  bg.querySelector("#ver-vsearch").onclick = async () => {
+    const res = bg.querySelector("#ver-results");
+    res.innerHTML = '<div class="verhint">Searching for the official video…</div>';
+    try {
+      const data = await api(`/api/tracks/${pk}/video-candidates/search`, { method: "POST", body: "{}" });
+      state.verCache = { pk, t, cands: data.candidates };
+      renderVersionCandidates(res);
+      reloadCurrent();
     } catch (e) { res.innerHTML = `<div class="verhint">Search failed: ${esc(e.message)}</div>`; }
   };
   bg.querySelector("#ver-save").onclick = async () => {
@@ -776,7 +808,7 @@ function renderVersionCandidates(el) {
     const label = `${(t.canonical_artist || "")} — ${(t.canonical_title || "")}`;
     return `<div class="vrow ${c.veto_reason ? "isveto" : ""}">
       <div class="vmain">
-        <div class="vtitle">${esc(c.candidate_title || "?")} ${badge}${applied ? ' <span class="vbad hi">✓ in use</span>' : ""}${c.status === "superseded" ? ' <span class="vbad lo">superseded</span>' : ""}</div>
+        <div class="vtitle">${c.kind === "video" ? '<span class="vbad mid" title="official-video candidate — approving sets the prefer-videos version">🎬</span> ' : ""}${esc(c.candidate_title || "?")} ${badge}${applied ? ' <span class="vbad hi">✓ in use</span>' : ""}${c.status === "superseded" ? ' <span class="vbad lo">superseded</span>' : ""}</div>
         <div class="vsub">${esc(c.candidate_channel || "")} · ${cd} vs ${canon}${c.result_type ? " · " + esc(c.result_type) : ""}</div>
         <div class="vev">${ev}</div>
       </div>
@@ -794,15 +826,16 @@ function previewVersion(videoId, label, pk) {
 }
 
 async function approveVersion(candidateId) {
+  let applied;
   try {
-    await api(`/api/version-candidates/${candidateId}/approve`, { method: "POST", body: "{}" });
+    applied = await api(`/api/version-candidates/${candidateId}/approve`, { method: "POST", body: "{}" });
   } catch (e) { toast(e.message || "Couldn't apply"); return; }
-  toast("Playback version set ✓");
-  // Reflect locally: this one approved, the rest for the track superseded.
+  toast(applied.kind === "video" ? "Official video set ✓" : "Playback version set ✓");
+  // Reflect locally: this one approved, the rest OF THE SAME KIND superseded.
   const c = state.verCache.cands.find(x => x.candidate_id === candidateId);
   if (c) {
     c.status = "approved";
-    state.verCache.cands.forEach(x => { if (x.candidate_id !== candidateId && x.status === "pending") x.status = "superseded"; });
+    state.verCache.cands.forEach(x => { if (x.candidate_id !== candidateId && x.status === "pending" && x.kind === c.kind) x.status = "superseded"; });
   }
   const el = document.querySelector("#ver-results");
   if (el) renderVersionCandidates(el);
@@ -2034,20 +2067,62 @@ async function dismissPair(id) {
   loadMatches();
 }
 
-// ── Tags admin: global hide-list + alias ──
+// ── Tags admin: suggestions queue + read-only vocabulary + hide/alias list ──
 function vocabRowsHtml(rows) {
   return rows.length ? rows.map(v => `
     <div class="vocab ${v.hidden ? "hidden-tag" : ""}">
       <div class="vname">${esc(v.tag)} <span class="vn">${v.n}</span>${v.alias_to ? ` <span class="alias">→ ${esc(v.alias_to)}</span>` : ""}</div>
+      ${v.layer ? `<span class="vlayer" title="this tag is a vocabulary profile">${esc(v.layer)}</span>` : ""}
+      ${v.manual ? '<span class="vlayer manual" title="applied by hand on ≥1 track">manual</span>' : ""}
       <button class="vbtn ${v.hidden ? "on" : ""}" onclick="toggleHide('${esc(v.tag)}', ${v.hidden ? 0 : 1})">${v.hidden ? "Hidden" : "Hide"}</button>
       <button class="vbtn" onclick="aliasTag('${esc(v.tag)}')">${v.alias_to ? "Re-alias" : "Alias"}</button>
     </div>`).join("") : '<div class="empty">No tags match.</div>';
 }
 
+// New-subgenre suggestions the nightly extraction proposed (per-family tier
+// quota). Approve = becomes a real subgenre profile (survives deploys);
+// reject = never suggested again.
+function suggRowsHtml(rows) {
+  return rows.map(s => `
+    <div class="sugg" id="sugg-${s.suggestion_id}">
+      <div class="sname">${esc(s.tag)} <span class="sn">${s.track_count} tracks</span>
+        ${s.family ? ` <span class="sfam">${esc(s.family)}</span>` : ""}
+        ${s.was_alias_to ? ` <span class="salias" title="the vocab lock folds this tag into ‘${esc(s.was_alias_to)}’ — approving removes that fold">currently folded → ${esc(s.was_alias_to)}</span>` : ""}</div>
+      <button class="sbtn ok" onclick="decideSuggestion(${s.suggestion_id}, 'approve')">✓ Add</button>
+      <button class="sbtn" onclick="decideSuggestion(${s.suggestion_id}, 'reject')">✕</button>
+    </div>`).join("");
+}
+
+// Display order for the read-only vocabulary section (differs from the
+// tap-palette's LAYER_ORDER: browsing reads set-arc → moments → genres).
+const VOCAB_LAYER_ORDER = ["functional", "personal", "family", "subgenre", "era"];
+function vocabProfilesHtml(profiles) {
+  return VOCAB_LAYER_ORDER.map(layer => {
+    const ps = profiles.filter(p => p.taxonomy_layer === layer);
+    if (!ps.length) return "";
+    return `<div class="vsec">${layer} · ${ps.length}</div>
+      <div class="vprof">${ps.map(p =>
+        `<span class="vp ${p.origin === "user_approved" ? "userok" : ""}"
+               title="${esc(p.description || "")}${p.origin === "user_approved" ? " (added by you via suggestions)" : ""}">${esc(p.tag_name)} <span class="vpn">${p.n}</span></span>`).join("")}</div>`;
+  }).join("");
+}
+
 async function loadTags() {
-  state.vocab = await api("/api/vocabulary");
+  const [sugg, profiles, vocab] = await Promise.all([
+    api("/api/vocab-suggestions"), api("/api/vocabulary/profiles"), api("/api/vocabulary"),
+  ]);
+  state.vocab = vocab;
   $("tags").innerHTML =
-    `<div class="stats">${state.vocab.length} distinct tags · "Hide" removes a tag everywhere; "Alias" merges a spelling variant into another tag.</div>
+    `${sugg.suggestions.length ? `<div class="vsec">Suggested subgenres · ${sugg.suggestions.length}</div>
+        <div class="stats">Your library's coverage earned these candidate slots. ✓ Add makes it a real subgenre; ✕ hides it forever.</div>
+        <div id="sugglist">${suggRowsHtml(sugg.suggestions)}</div>`
+      : '<div class="vsec">Suggested subgenres</div><div class="stats" id="sugglist-empty">None pending. New candidates appear as your library and tagging grow.</div>'}
+     <button class="scanbtn" onclick="rescanVocab(this)">⟳ Scan library for candidates now</button>
+     <div class="vsec">Vocabulary</div>
+     <div class="stats">The tagging vocabulary, grouped by layer. Additions arrive via suggestions above; renames stay locked.</div>
+     ${vocabProfilesHtml(profiles)}
+     <div class="vsec">All raw tags</div>
+     <div class="stats">${state.vocab.length} distinct tags · "Hide" removes a tag everywhere; "Alias" merges a spelling variant into another tag.</div>
      <input class="vocabsearch" id="vocabsearch" placeholder="Filter tags…" autocomplete="off" autocapitalize="none">
      <div id="vocablist">${vocabRowsHtml(state.vocab.slice(0, 250))}</div>`;
   $("vocabsearch").oninput = (e) => {
@@ -2055,6 +2130,23 @@ async function loadTags() {
     const rows = (f ? state.vocab.filter(v => v.tag.includes(f)) : state.vocab).slice(0, 250);
     $("vocablist").innerHTML = vocabRowsHtml(rows);
   };
+}
+
+async function decideSuggestion(id, action) {
+  try {
+    const r = await api(`/api/vocab-suggestions/${id}/${action}`, { method: "POST", body: "{}" });
+    toast(action === "approve" ? `Added “${r.tag}” to the vocabulary ✓` : `Rejected — won't suggest again`);
+  } catch (e) { toast(e.message || "Couldn't save"); }
+  await loadTags(); loadTagChips();
+}
+
+async function rescanVocab(btn) {
+  btn.disabled = true; btn.textContent = "Scanning…";
+  try {
+    const r = await api("/api/vocab-suggestions/recompute", { method: "POST", body: "{}" });
+    toast(r.new.length ? `${r.new.length} new suggestion${r.new.length > 1 ? "s" : ""}` : "No new candidates right now");
+  } catch (e) { toast(e.message || "Scan failed"); }
+  await loadTags();
 }
 
 async function toggleHide(tag, hidden) {

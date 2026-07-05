@@ -1,14 +1,19 @@
-"""Job 8 — nightly tag-frequency report regen (TEMPORARY).
+"""Job 8 — nightly tag-frequency + vocabulary-expansion watch.
 
-Re-runs the read-only public-tag frequency extraction
-(CLAUDE-CODE-HANDOFF-tag-frequency-extraction.md) each night while the
-subgenre vocabulary is still unlocked, writing a dated report file and
-handing coverage % + top movers to the digest. Once the vocab locks
-(expected ~4 Jul 2026), set TAG_FREQ_NIGHTLY=0 and note the retirement in
-the changelog.
+REVIVED 2026-07-05 with a new purpose (retired 4 Jul when the vocab lock
+landed; Matthias's 4 Jul ruling made expansion dynamic, so the job returns
+rather than a parallel one being built). Each night it:
 
-Raw tags only (tag_type='public'), NOT the effective_track_tags view — the
-pre-curation picture including junk is the point; junk feeds the hide-list.
+  1. Recomputes family coverage vs the tier quotas and tops up the
+     vocabulary-suggestions queue (app/tags/vocab_expansion.py). New
+     suggestions surface in the Tags tab (one-tap approve/reject) and as a
+     line in the 07:00 digest.
+  2. Writes the dated tag-frequency report — now the COMPLETE frequency
+     table (the old top-75 cut hid the 30–56 band, exactly where candidate
+     tags live), raw public tags as before (pre-curation junk feeds the
+     hide-list).
+
+Flip TAG_FREQ_NIGHTLY=1 to run (it was set to 0 at retirement).
 """
 
 from __future__ import annotations
@@ -21,7 +26,10 @@ from app.db.connection import db_conn
 from app.jobs import runs
 
 JOB_NAME = "tag_frequency"
-_TOP_N = 75
+# Report-file row floor. 1 = the COMPLETE table (the old top-75 cut hid the
+# 30–56 band, exactly where candidates live); raise only if the file gets
+# unwieldy — the suggestion computation always sees the full table regardless.
+_REPORT_MIN_TRACKS = 1
 
 
 def _reports_dir() -> Path:
@@ -42,7 +50,12 @@ def coverage(db_path: str | None = None) -> dict:
 
 
 def run_report(db_path: str | None = None) -> dict:
-    """Write the dated report; return coverage + top movers for the digest."""
+    """Vocab-expansion pass + dated report; returns digest material."""
+    # 1. Vocabulary expansion — never let a report hiccup block it, and vice
+    # versa: each half reports its own failure through the job status.
+    from app.tags.vocab_expansion import compute_suggestions
+    expansion = compute_suggestions(db_path)
+
     cov = coverage(db_path)
     with db_conn(db_path) as conn:
         top = conn.execute(
@@ -52,8 +65,8 @@ def run_report(db_path: str | None = None) -> dict:
                       SUM(CASE WHEN source = 'discogs' THEN 1 ELSE 0 END) AS discogs,
                       SUM(CASE WHEN source = 'bandcamp' THEN 1 ELSE 0 END) AS bandcamp
                FROM track_tags WHERE tag_type = 'public'
-               GROUP BY tag ORDER BY n DESC LIMIT ?""",
-            (_TOP_N,),
+               GROUP BY tag HAVING n >= ? ORDER BY n DESC""",
+            (_REPORT_MIN_TRACKS,),
         ).fetchall()
 
     date = datetime.now(timezone.utc).date().isoformat()
@@ -62,6 +75,28 @@ def run_report(db_path: str | None = None) -> dict:
         "",
         f"Coverage: {cov['with_public_tag']} / {cov['total']} tracks "
         f"({cov['pct']}%) have ≥1 public tag.",
+        "",
+        "## Vocabulary expansion",
+        "",
+        f"Pending suggestions: {expansion['pending_total']} "
+        f"(+{len(expansion['new'])} new tonight, "
+        f"{expansion['unassigned_skipped']} candidates skipped — no family "
+        f"co-occurrence).",
+        "",
+        "| family | coverage (tracks) | candidate slots |",
+        "|---|---|---|",
+    ]
+    for fam in sorted(expansion["coverage"], key=lambda f: -expansion["coverage"][f]):
+        lines.append(
+            f"| {fam} | {expansion['coverage'][fam]} | {expansion['slots'][fam]} |"
+        )
+    if expansion["new"]:
+        lines += ["", "New suggestions: "
+                  + ", ".join(f"{s['tag']} ({s['family']}, {s['n']})"
+                              for s in expansion["new"])]
+    lines += [
+        "",
+        f"## Full frequency table (raw public tags, ≥{_REPORT_MIN_TRACKS} tracks)",
         "",
         "| rank | tag | tracks | lastfm | listenbrainz | discogs | bandcamp |",
         "|---|---|---|---|---|---|---|",
@@ -89,4 +124,6 @@ def run_report(db_path: str | None = None) -> dict:
     runs.merge_detail(JOB_NAME, {"top_counts": counts}, db_path)
 
     return {"coverage_pct": cov["pct"], "report_path": str(out_path),
-            "movers": movers}
+            "movers": movers,
+            "suggestions_new": len(expansion["new"]),
+            "suggestions_pending": expansion["pending_total"]}
