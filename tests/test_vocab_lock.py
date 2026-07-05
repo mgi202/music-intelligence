@@ -45,9 +45,10 @@ def test_locked_profile_budget_is_55(db):
         }
     finally:
         conn.close()
-    assert n == 55
+    # 55 at the 2026-07-03 lock + pop rap (2026-07-05 one-off) = 56.
+    assert n == 56
     assert layers == {"functional": 8, "personal": 7, "family": 11,
-                      "subgenre": 24, "era": 5}
+                      "subgenre": 25, "era": 5}
 
 
 def test_interim_subgenres_dropped_when_label_free_kept_with_labels(db):
@@ -146,7 +147,7 @@ def test_era_check_migration_rebuilds_legacy_table_preserving_labels(db):
         assert conn.execute(
             "SELECT COUNT(*) FROM tag_profiles WHERE taxonomy_layer='era'"
         ).fetchone()[0] == 5
-        assert conn.execute("SELECT COUNT(*) FROM tag_profiles").fetchone()[0] == 55
+        assert conn.execute("SELECT COUNT(*) FROM tag_profiles").fetchone()[0] == 56
     finally:
         conn.close()
 
@@ -166,7 +167,10 @@ def test_locked_aliases_and_hides_seeded(db):
     assert rows["rap"] == (0, "hip hop")
     assert rows["rnb"] == (0, "r&b-soul")       # the 2 Jul rnb→r&b row, updated
     assert rows["shoegaze"] == (0, "dream pop")
-    assert rows["pop-rap"] == (0, "hip hop")    # straight through, no chain
+    # pop rap PROMOTED to a subgenre profile 2026-07-05: the spelling variant
+    # folds to it, and the raw tag itself is no longer aliased away.
+    assert rows["pop-rap"] == (0, "pop rap")
+    assert "pop rap" not in rows
     assert rows["funk / soul"] == (0, "disco-funk")   # aliased, NOT hidden
     # Hides.
     assert rows["electronic"] == (1, None)
@@ -179,7 +183,7 @@ def test_vocab_reconcile_is_idempotent_and_updates_stale_rulings(db):
     from app.tags.vocab_lock import reconcile_tag_vocabulary
     # Settled after init_db.
     again = reconcile_tag_vocabulary(db)
-    assert again == {"aliases_set": 0, "hides_set": 0,
+    assert again == {"aliases_set": 0, "hides_set": 0, "promotions_cleared": 0,
                      "chains_flattened": 0, "cycles": []}
     # A drifted row (the pre-lock ruling) is re-asserted.
     with db_conn(db) as c:

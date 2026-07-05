@@ -56,6 +56,10 @@ CREATE TABLE IF NOT EXISTS tracks (
     -- Verdict Queue (2026-07-02): set when Matthias skips a track in the rapid
     -- tagging tab, so the queue never re-serves it. NULL = eligible.
     verdict_skipped_at          TEXT,
+    -- Review commit stamp (2026-07-05): set when a card is committed. A
+    -- committed track NEVER returns to either Review lens (locked decision);
+    -- cleared only by the explicit undo path. NULL = still judgeable.
+    verdict_committed_at        TEXT,
     -- Bandcamp page URL for this track/release (2026-07-03). Set manually or by
     -- the nightly search sweep; when present, enrichment uses it as the
     -- manual_url path so Bandcamp tags survive re-enrichment.
@@ -76,6 +80,7 @@ CREATE INDEX IF NOT EXISTS idx_tracks_ytm_track_id     ON tracks(ytm_track_id);
 CREATE INDEX IF NOT EXISTS idx_tracks_artist_title     ON tracks(normalized_artist, normalized_title);
 CREATE INDEX IF NOT EXISTS idx_tracks_status           ON tracks(match_status);
 CREATE INDEX IF NOT EXISTS idx_tracks_rating           ON tracks(personal_rating);
+CREATE INDEX IF NOT EXISTS idx_tracks_verdict_committed ON tracks(verdict_committed_at);
 
 -- ─────────────────────────────────────────
 -- Audio features (audio_enriched tracks only — Stage 1+)
@@ -258,8 +263,29 @@ CREATE TABLE IF NOT EXISTS tag_profiles (
     -- 2026-07-05 (family-gated tagging): a subgenre's parent family tag_name.
     -- NULL for family/functional/personal/era profiles.
     parent_family       TEXT,
+    -- 2026-07-05 (FE vocab manager): 1 = created/renamed by Matthias in the
+    -- Tags tab. reconcile_tag_profiles must NEVER drop or overwrite these
+    -- rows — the personal + subgenre layers are self-service now.
+    user_defined        INTEGER NOT NULL DEFAULT 0,
+    -- 2026-07-05 (FE vocab manager): soft retire. A retired profile is hidden
+    -- from Review questions/suggestions and readiness; its tags and reference
+    -- labels stay untouched. NULL = active.
+    retired_at          TEXT,
     created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ─────────────────────────────────────────
+-- Profile rename tombstones (2026-07-05 — FE vocab manager).
+-- When a profile is renamed in the Tags tab, the old id is recorded here so
+-- reconcile_tag_profiles never re-inserts a LOCKED profile that was renamed
+-- away (labels + manual tags migrate at rename time; this keeps the old name
+-- from resurrecting on the next deploy).
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS tag_profile_renames (
+    old_profile_id  TEXT PRIMARY KEY,
+    new_profile_id  TEXT NOT NULL,
+    renamed_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ─────────────────────────────────────────

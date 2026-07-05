@@ -89,25 +89,129 @@ function suggRowsHtml(rows) {
     </div>`).join("");
 }
 
-// Display order for the read-only vocabulary section (differs from the
-// tap-palette's LAYER_ORDER: browsing reads set-arc → moments → genres).
+// Display order for the vocabulary section (differs from the tap-palette's
+// LAYER_ORDER: browsing reads set-arc → moments → genres).
 const VOCAB_LAYER_ORDER = ["functional", "personal", "family", "subgenre", "era"];
+// Self-service layers (2026-07-05): personal is Matthias's own (place-anchored
+// contexts like egg-floor-2), subgenres grow with the library. Functional +
+// era stay code-locked — set order, hotkeys and the era prefill depend on
+// their exact membership.
+const VOCAB_MANAGED_LAYERS = ["personal", "subgenre"];
+
 function vocabProfilesHtml(profiles) {
   return VOCAB_LAYER_ORDER.map(layer => {
     const ps = profiles.filter(p => p.taxonomy_layer === layer);
-    if (!ps.length) return "";
-    return `<div class="vsec">${layer} · ${ps.length}</div>
-      <div class="vprof">${ps.map(p =>
-        `<span class="vp ${p.origin === "user_approved" ? "userok" : ""}"
-               title="${esc(p.description || "")}${p.origin === "user_approved" ? " (added by you via suggestions)" : ""}">${esc(p.tag_name)} <span class="vpn">${p.n}</span></span>`).join("")}</div>`;
+    const managed = VOCAB_MANAGED_LAYERS.includes(layer);
+    if (!ps.length && !managed) return "";
+    const active = ps.filter(p => !p.retired_at).length;
+    const addBtn = managed
+      ? ` <button class="vbtn vpadd" onclick="vpAdd('${layer}')" title="add a new ${layer} profile — it appears in Review immediately">+ add</button>` : "";
+    return `<div class="vsec">${layer} · ${active}${addBtn}</div>
+      <div class="vprof">${ps.map(p => vpChipHtml(p, managed)).join("")}</div>`;
   }).join("");
+}
+
+function vpChipHtml(p, managed) {
+  const user = p.user_defined || p.origin === "user_approved";
+  const title = `${p.description || ""}${user ? " (added by you)" : ""}${p.retired_at ? " — retired: hidden from Review; tags and labels kept" : ""}`;
+  if (!managed) {
+    return `<span class="vp ${user ? "userok" : ""}" title="${esc(title)}">${esc(p.tag_name)} <span class="vpn">${p.n}</span></span>`;
+  }
+  const acts = p.retired_at
+    ? `<a class="vpact" title="bring it back — returns to Review immediately" onclick="vpRestore('${esc(p.profile_id)}')">restore</a>`
+    : `<a class="vpact" title="rename — labels and manual tags migrate, nothing is lost" onclick="vpRename('${esc(p.profile_id)}')">✎</a>
+       <a class="vpact" title="retire — hides it from Review questions and readiness; existing tags and labels stay" onclick="vpRetire('${esc(p.profile_id)}')">retire</a>`;
+  const del = (p.n_labels === 0)
+    ? `<a class="vpact del" title="delete — only possible while it has no labels and no manual tags" onclick="vpDelete('${esc(p.profile_id)}')">×</a>` : "";
+  return `<span class="vp ${user ? "userok" : ""} ${p.retired_at ? "retired" : ""}" title="${esc(title)}">
+    ${esc(p.tag_name)} <span class="vpn">${p.n}</span>${acts}${del}</span>`;
+}
+
+// Profile mutations invalidate every cached copy of the vocabulary so Review
+// chips and the tag palette pick the change up on their next render.
+function vpInvalidateProfiles() {
+  state.vqProfiles = null;      // Review micro-question chips
+  state.profileList = null;     // + tag palette (library modal)
+}
+
+function vpAdd(layer) {
+  const fams = (state.vocabProfiles || []).filter(p => p.taxonomy_layer === "family");
+  const famRow = layer === "subgenre"
+    ? `<label>Family (gates the tag palette)</label>
+       <select id="vp-fam"><option value="">— none —</option>${fams.map(f =>
+         `<option value="${esc(f.tag_name)}">${esc(f.tag_name)}</option>`).join("")}</select>` : "";
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.onclick = (ev) => { if (ev.target === bg) bg.remove(); };
+  bg.innerHTML = `<div class="modal"><h2>New ${layer} profile</h2>
+    <label>Name${layer === "personal" ? " (kebab-case, e.g. egg-floor-2, beach)" : " (e.g. hip house)"}</label>
+    <input id="vp-name" autocomplete="off" autocapitalize="none">
+    <label>Description (required — becomes the chip's hover tooltip in Review)</label>
+    <input id="vp-desc" autocomplete="off" placeholder="${layer === "personal" ? "Where would I most likely hear this?" : "What does it sound like?"}">
+    <label>Extra matching terms (optional, comma-separated — widens which public tags map to it)</label>
+    <input id="vp-terms" autocomplete="off" autocapitalize="none">
+    ${famRow}
+    <div class="hint" style="margin-top:10px">Starts untrained (0/15 yes · 0/15 no · 0/3 artists) — it needs ~30 judgements before auto-tagging can use it.</div>
+    <div class="btnrow"><button onclick="this.closest('.modal-bg').remove()">Cancel</button>
+      <button class="primary" id="vp-save">Add</button></div></div>`;
+  document.body.appendChild(bg);
+  bg.querySelector("#vp-name").focus();
+  bg.querySelector("#vp-save").onclick = async () => {
+    const body = {
+      name: bg.querySelector("#vp-name").value,
+      layer,
+      description: bg.querySelector("#vp-desc").value,
+      context_terms: bg.querySelector("#vp-terms").value.split(",").map(s => s.trim()).filter(Boolean),
+      parent_family: layer === "subgenre" ? (bg.querySelector("#vp-fam").value || null) : null,
+    };
+    try {
+      const r = await api("/api/vocabulary/profiles", { method: "POST", body: JSON.stringify(body) });
+      bg.remove();
+      toast(`Added “${r.profile_id}” — needs ~30 judgements before auto-tagging can use it`);
+      vpInvalidateProfiles(); await loadTags(); loadTagChips();
+    } catch (e) { toast(e.message || "Couldn't add"); }
+  };
+}
+
+async function vpRename(pid) {
+  const name = prompt(`Rename "${pid}" to:\nLabels, manual tags and training data all migrate — nothing is lost.`, pid);
+  if (name === null || !name.trim() || name.trim() === pid) return;
+  try {
+    const r = await api(`/api/vocabulary/profiles/${encodeURIComponent(pid)}/rename`,
+                        { method: "POST", body: JSON.stringify({ new_name: name }) });
+    toast(`Renamed to “${r.profile_id}” — ${r.labels_migrated} label(s) + ${r.tags_migrated} tag(s) migrated`);
+  } catch (e) { toast(e.message || "Rename failed"); return; }
+  vpInvalidateProfiles(); await loadTags(); loadTagChips();
+}
+
+async function vpRetire(pid) {
+  if (!confirm(`Retire "${pid}"?\nIt disappears from Review questions, suggestions and readiness. Existing tags and labels stay, and you can restore it here any time.`)) return;
+  try { await api(`/api/vocabulary/profiles/${encodeURIComponent(pid)}/retire`, { method: "POST", body: "{}" }); }
+  catch (e) { toast(e.message || "Retire failed"); return; }
+  toast(`Retired “${pid}” — restore it here any time`);
+  vpInvalidateProfiles(); await loadTags(); loadTagChips();
+}
+
+async function vpRestore(pid) {
+  try { await api(`/api/vocabulary/profiles/${encodeURIComponent(pid)}/restore`, { method: "POST", body: "{}" }); }
+  catch (e) { toast(e.message || "Restore failed"); return; }
+  toast(`Restored “${pid}” — back in Review`);
+  vpInvalidateProfiles(); await loadTags(); loadTagChips();
+}
+
+async function vpDelete(pid) {
+  if (!confirm(`Delete "${pid}" for good?\nOnly possible while it has no labels and no manual tags.`)) return;
+  try { await api(`/api/vocabulary/profiles/${encodeURIComponent(pid)}`, { method: "DELETE" }); }
+  catch (e) { toast(e.message || "Delete refused — retire instead"); return; }
+  toast(`Deleted “${pid}”`);
+  vpInvalidateProfiles(); await loadTags(); loadTagChips();
 }
 
 async function loadTags() {
   const [sugg, profiles, vocab] = await Promise.all([
     api("/api/vocab-suggestions"), api("/api/vocabulary/profiles"), api("/api/vocabulary"),
   ]);
-  state.vocab = vocab;
+  state.vocab = vocab; state.vocabProfiles = profiles;
   $("tags").innerHTML =
     `${sugg.suggestions.length ? `<div class="vsec">Suggested subgenres · ${sugg.suggestions.length}</div>
         <div class="stats">Your library's coverage earned these candidate slots. ✓ Add makes it a real subgenre; ✕ hides it forever.</div>
@@ -115,7 +219,7 @@ async function loadTags() {
       : '<div class="vsec">Suggested subgenres</div><div class="stats" id="sugglist-empty">None pending. New candidates appear as your library and tagging grow.</div>'}
      <button class="scanbtn" onclick="rescanVocab(this)">⟳ Scan library for candidates now</button>
      <div class="vsec">Vocabulary</div>
-     <div class="stats">The tagging vocabulary, grouped by layer. Additions arrive via suggestions above; renames stay locked.</div>
+     <div class="stats">The tagging vocabulary, grouped by layer. Personal and subgenre are yours to manage — add, rename, retire. Functional and era stay code-locked (hotkeys and set order depend on them).</div>
      ${vocabProfilesHtml(profiles)}
      <div class="vsec">All raw tags</div>
      <div class="stats">${state.vocab.length} distinct tags · "Hide" removes a tag everywhere; "Alias" merges a spelling variant into another tag.</div>

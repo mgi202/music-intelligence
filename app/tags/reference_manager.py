@@ -373,6 +373,8 @@ def _build_tag_index(conn) -> tuple[dict[str, set[str]], dict[str, str]]:
     A profile is matched by its tag_name and by each of its context_terms.
     Terms that are too generic — appearing under 3+ profiles (e.g. "techno") —
     are dropped so a broad tag can't spray positives across the taxonomy.
+    RETIRED profiles (FE vocab manager soft-retire) are excluded entirely:
+    no new suggestions and no new derived labels; existing tags/labels stay.
     Returns (term_to_profiles, profile_layer).
     """
     import json as _json
@@ -380,7 +382,8 @@ def _build_tag_index(conn) -> tuple[dict[str, set[str]], dict[str, str]]:
     raw: dict[str, set[str]] = {}
     layer: dict[str, str] = {}
     for row in conn.execute(
-        "SELECT profile_id, tag_name, taxonomy_layer, context_terms_json FROM tag_profiles"
+        "SELECT profile_id, tag_name, taxonomy_layer, context_terms_json "
+        "FROM tag_profiles WHERE retired_at IS NULL"
     ).fetchall():
         pid = row["profile_id"]
         layer[pid] = row["taxonomy_layer"]
@@ -397,7 +400,9 @@ def _build_tag_index(conn) -> tuple[dict[str, set[str]], dict[str, str]]:
     # Drop over-generic terms (shared by 3+ profiles). tag_name terms are always
     # kept, since a profile's own name is never "too generic" for itself.
     names = {_norm(r["tag_name"]) for r in
-             conn.execute("SELECT tag_name FROM tag_profiles").fetchall()}
+             conn.execute(
+                 "SELECT tag_name FROM tag_profiles WHERE retired_at IS NULL"
+             ).fetchall()}
     index = {
         term: pids for term, pids in raw.items()
         if term in names or len(pids) < 3

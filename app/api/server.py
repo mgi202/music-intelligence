@@ -59,6 +59,19 @@ class VocabRequest(BaseModel):
     alias_to: Optional[str] = None
 
 
+class ProfileCreateRequest(BaseModel):
+    # FE vocab manager (2026-07-05): personal + subgenre layers only.
+    name: str
+    layer: str
+    description: str
+    context_terms: Optional[list[str]] = None
+    parent_family: Optional[str] = None   # subgenre only
+
+
+class ProfileRenameRequest(BaseModel):
+    new_name: str
+
+
 class AddToPlaylistRequest(BaseModel):
     playlist_name: Optional[str] = None  # for the re-created membership row (undo)
 
@@ -398,7 +411,7 @@ def reference_readiness():
     conn = get_connection()
     try:
         ids = [r["profile_id"] for r in conn.execute(
-            "SELECT profile_id FROM tag_profiles "
+            "SELECT profile_id FROM tag_profiles WHERE retired_at IS NULL "
             "ORDER BY taxonomy_layer, COALESCE(sort_order, 999), profile_id"
         ).fetchall()]
     finally:
@@ -519,9 +532,10 @@ def reference_profiles():
     conn = get_connection()
     try:
         # sort_order: set order for functional chips (R2) — never alphabetical.
+        # Retired profiles (FE vocab manager) never reach Review or the palette.
         rows = conn.execute(
             "SELECT profile_id, tag_name, taxonomy_layer, description, parent_family "
-            "FROM tag_profiles "
+            "FROM tag_profiles WHERE retired_at IS NULL "
             "ORDER BY taxonomy_layer, COALESCE(sort_order, 999), tag_name"
         ).fetchall()
     finally:
@@ -574,6 +588,27 @@ def verdict_unskip_all():
     """Re-serve every previously-skipped track (UI footer escape hatch)."""
     from app.tags import verdict_queue as vq
     return vq.unskip_all()
+
+
+@app.post("/api/tracks/{track_pk}/verdict/commit")
+def verdict_commit(track_pk: str):
+    """Stamp a Review commit — the track never returns to either lens.
+    Called by the FE as part of Commit & next; undo calls uncommit."""
+    from app.tags import verdict_queue as vq
+    try:
+        return vq.commit_track(track_pk)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/tracks/{track_pk}/verdict/uncommit")
+def verdict_uncommit(track_pk: str):
+    """Clear the commit stamp (the undo path) so the track re-serves."""
+    from app.tags import verdict_queue as vq
+    try:
+        return vq.uncommit_track(track_pk)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
 
 
 @app.get("/api/tags")
@@ -648,10 +683,13 @@ def list_vocabulary_profiles():
     try:
         rows = conn.execute(
             """SELECT p.profile_id, p.tag_name, p.description, p.taxonomy_layer,
-                      p.sort_order, p.origin,
+                      p.sort_order, p.origin, p.parent_family,
+                      p.user_defined, p.retired_at,
                       (SELECT COUNT(DISTINCT e.track_pk)
                        FROM effective_track_tags e
-                       WHERE e.tag = LOWER(p.tag_name)) AS n
+                       WHERE e.tag = LOWER(p.tag_name)) AS n,
+                      (SELECT COUNT(*) FROM reference_track_labels r
+                       WHERE r.profile_id = p.profile_id) AS n_labels
                FROM tag_profiles p
                ORDER BY CASE p.taxonomy_layer
                             WHEN 'functional' THEN 0 WHEN 'personal' THEN 1
@@ -709,6 +747,64 @@ def reject_vocab_suggestion(suggestion_id: int):
         raise HTTPException(404, "Suggestion not found")
     except LookupError as e:
         raise HTTPException(409, str(e))
+
+
+# ─────────────────────────────────────────
+# FE vocabulary manager (2026-07-05) — personal + subgenre profiles are
+# self-service; functional and era stay code-locked.
+# ─────────────────────────────────────────
+
+def _vocab_manager_errors(fn, *args, **kwargs):
+    """Shared error mapping for the vocab-manager endpoints."""
+    try:
+        return fn(*args, **kwargs)
+    except LookupError as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(404 if "not found" in str(e).lower() else 400, str(e))
+
+
+@app.post("/api/vocabulary/profiles")
+def create_vocab_profile(body: ProfileCreateRequest):
+    """Add a personal/subgenre profile. Starts untrained (0/15/15/3) — it
+    needs ~30 judgements before auto-tagging can use it. user_defined rows
+    survive every init_db/reconcile."""
+    from app.tags import vocab_manager
+    return _vocab_manager_errors(
+        vocab_manager.create_profile,
+        body.name, body.layer, body.description,
+        context_terms=body.context_terms, parent_family=body.parent_family,
+    )
+
+
+@app.post("/api/vocabulary/profiles/{profile_id}/rename")
+def rename_vocab_profile(profile_id: str, body: ProfileRenameRequest):
+    """Rename a personal/subgenre profile — labels, classification results and
+    manual tags all migrate; the old id is tombstoned against reconcile."""
+    from app.tags import vocab_manager
+    return _vocab_manager_errors(vocab_manager.rename_profile, profile_id, body.new_name)
+
+
+@app.post("/api/vocabulary/profiles/{profile_id}/retire")
+def retire_vocab_profile(profile_id: str):
+    """Soft retire — hidden from Review and readiness; tags and labels stay."""
+    from app.tags import vocab_manager
+    return _vocab_manager_errors(vocab_manager.retire_profile, profile_id)
+
+
+@app.post("/api/vocabulary/profiles/{profile_id}/restore")
+def restore_vocab_profile(profile_id: str):
+    """Un-retire a profile — back in Review immediately."""
+    from app.tags import vocab_manager
+    return _vocab_manager_errors(vocab_manager.restore_profile, profile_id)
+
+
+@app.delete("/api/vocabulary/profiles/{profile_id}")
+def delete_vocab_profile(profile_id: str):
+    """Hard delete — refused (409) unless the profile has zero labels and
+    zero manual tags."""
+    from app.tags import vocab_manager
+    return _vocab_manager_errors(vocab_manager.delete_profile, profile_id)
 
 
 @app.put("/api/vocabulary/{tag}")

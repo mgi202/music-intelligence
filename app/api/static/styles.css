@@ -316,6 +316,15 @@
   .vprof .vp { font-size: 11.5px; padding: 3px 10px; border-radius: 999px; background: var(--panel); border: 1px solid #2b2b38; color: var(--text); cursor: default; }
   .vprof .vp .vpn { color: var(--dim); font-size: 10px; }
   .vprof .vp.userok { border-color: #3a4c2f; }
+  /* Vocab manager (2026-07-05): per-chip actions on personal + subgenre. */
+  .vprof .vp.retired { opacity: .45; }
+  .vprof .vp .vpact { margin-left: 7px; font-size: 10px; color: var(--dim); cursor: pointer; }
+  .vprof .vp .vpact:hover { color: var(--accent); }
+  .vprof .vp .vpact.del:hover { color: var(--danger); }
+  .vsec .vpadd { text-transform: none; letter-spacing: 0; margin-left: 8px;
+    background: none; border: 1px dashed #3a3a48; color: var(--dim);
+    padding: 2px 9px; border-radius: 999px; font-size: 11px; cursor: pointer; }
+  .vsec .vpadd:hover { color: var(--accent); border-color: var(--accent); }
   .scanbtn { background: none; border: 1px dashed #3a3a48; color: var(--dim); padding: 6px 12px; border-radius: 8px; font-size: 12px; cursor: pointer; }
 
   /* ── Verdict Queue ── */

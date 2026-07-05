@@ -237,11 +237,15 @@ def seed_example_rules(
 # Locked tag vocabulary (TAG-VOCAB-DESIGN.md).
 #
 # Functional (8) + personal (7) LOCKED 2026-07-02; family (11) + subgenre (24)
-# + era (5) LOCKED 2026-07-03 — 55 locked profiles. The hard 55 cap was
-# RETIRED 2026-07-04: subgenre additions now arrive dynamically via the
-# vocabulary-suggestions queue (app/tags/vocab_expansion.py, per-family tier
-# quotas) as origin='user_approved' DB rows. Renames + deletions of anything
-# below stay code-locked HERE (label-preserving migration path only).
+# + era (5) LOCKED 2026-07-03; subgenre pop rap ADDED 2026-07-05 (Matthias-
+# approved one-off) — 56 locked profiles. The hard cap was RETIRED 2026-07-04:
+# subgenre additions now arrive dynamically via the vocabulary-suggestions
+# queue (app/tags/vocab_expansion.py, per-family tier quotas) and — since
+# 2026-07-05 — the FE vocab manager (personal + subgenre layers,
+# app/tags/vocab_manager.py) as user-owned DB rows. Renames + deletions of the
+# LOCKED rows below stay code-locked HERE (label-preserving migration path),
+# except FE renames recorded in tag_profile_renames (tombstones reconcile
+# honours).
 #
 # descriptions are copied verbatim from TAG-VOCAB-DESIGN.md (or written in its
 # voice for family/subgenre/era) so the FE renders each chip's definition as a
@@ -258,7 +262,7 @@ def seed_example_rules(
 # the Review card's prefill but must never surface as suggestion chips.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# functional (8) + personal (7) + family (11) + subgenre (24) + era (5).
+# functional (8) + personal (7) + family (11) + subgenre (25) + era (5).
 LOCKED_TAG_PROFILES: list[dict] = [
     # ── Functional — a track's job in a set arc ──
     {"profile_id": "warm-up", "sort_order": 0, "tag_name": "warm-up", "taxonomy_layer": "functional",
@@ -445,6 +449,13 @@ LOCKED_TAG_PROFILES: list[dict] = [
      "description": "Hazy, reverb-washed guitar pop — shoegaze folded in; "
                     "texture over riffs.",
      "context_terms": ["shoegaze"]},
+    # 2026-07-05: Matthias-approved one-off addition (hip-hop-heavy library —
+    # the missing profile blocked judging). The old pop rap → hip hop fold is
+    # cleared by LOCKED_TAG_PROMOTIONS in vocab_lock.py.
+    {"profile_id": "pop rap", "parent_family": "hip hop", "sort_order": 24, "tag_name": "pop rap", "taxonomy_layer": "subgenre",
+     "description": "Rap built for the chorus — melodic hooks, radio-scale "
+                    "production, hip hop's mainstream lane.",
+     "context_terms": ["pop rap", "pop-rap"]},
 
     # ── Era — a production VIBE, not a release date (5, LOCKED 2026-07-03).
     #    "Sounds like", judged by ear — a 2023 track can be 80s-sound. The
@@ -556,12 +567,15 @@ def reconcile_tag_profiles(db_path: str | None = None) -> dict:
          spec profile onto its locked successor (PROFILE_RENAME_MAP), then drop
          the old profile row.
       2. Insert any missing locked profiles; refresh the description of ones
-         that already exist so definition edits reach the FE.
+         that already exist so definition edits reach the FE. Locked profiles
+         RENAMED AWAY in the FE vocab manager (tag_profile_renames tombstones)
+         are never re-inserted, and user_defined rows are never overwritten.
       3. Drop leftover non-locked profiles (e.g. melodic-late-night) ONLY when
          they carry no reference labels — never silently discard training data.
          Profiles with origin='user_approved' (vocabulary-suggestions queue,
-         2026-07-05) are ALWAYS kept: additions are DB-authoritative now;
-         only renames/deletions stay code-locked here.
+         2026-07-05) or user_defined=1 (FE vocab manager) are ALWAYS kept:
+         additions are DB-authoritative now; only renames/deletions of locked
+         rows stay code-locked here.
 
     Returns a summary dict {renamed, inserted, refreshed, dropped, kept_with_labels,
     kept_user_approved, labels_migrated}.
@@ -579,10 +593,26 @@ def reconcile_tag_profiles(db_path: str | None = None) -> dict:
             r["profile_id"] for r in
             conn.execute("SELECT profile_id FROM tag_profiles").fetchall()
         }
+        user_owned = {
+            r["profile_id"] for r in
+            conn.execute(
+                "SELECT profile_id FROM tag_profiles "
+                "WHERE user_defined = 1 OR origin = 'user_approved'"
+            ).fetchall()
+        }
+        # FE-rename tombstones: a locked id renamed away must stay gone.
+        renamed_away = {
+            r["old_profile_id"] for r in
+            conn.execute("SELECT old_profile_id FROM tag_profile_renames").fetchall()
+        }
 
         # 1. Insert missing locked profiles / refresh descriptions of present ones.
         for p in LOCKED_TAG_PROFILES:
             pid = p["profile_id"]
+            if pid in existing and pid in user_owned:
+                continue  # user re-created this name after renaming it away — theirs now
+            if pid not in existing and pid in renamed_away:
+                continue  # renamed away in the FE — don't resurrect the old name
             if pid in existing:
                 conn.execute(
                     "UPDATE tag_profiles SET description = ?, taxonomy_layer = ?, "
@@ -629,17 +659,20 @@ def reconcile_tag_profiles(db_path: str | None = None) -> dict:
             result["renamed"].append({"from": old_id, "to": new_id})
 
         # 3. Drop any remaining non-locked profile, but only if label-free AND
-        # not user-approved. origin='user_approved' rows came through the
-        # vocabulary-suggestions queue (2026-07-05) — the vocabulary is
-        # DB-authoritative for additions, so reconcile must never drop them
-        # even when they carry no reference labels yet.
+        # not user-owned. origin='user_approved' rows came through the
+        # vocabulary-suggestions queue (2026-07-05), user_defined=1 rows
+        # through the FE vocab manager — the vocabulary is DB-authoritative
+        # for additions, so reconcile must never drop either, even when they
+        # carry no reference labels yet.
         leftovers = [
-            (r["profile_id"], r["origin"]) for r in
-            conn.execute("SELECT profile_id, origin FROM tag_profiles").fetchall()
+            (r["profile_id"], r["origin"], r["user_defined"]) for r in
+            conn.execute(
+                "SELECT profile_id, origin, user_defined FROM tag_profiles"
+            ).fetchall()
             if r["profile_id"] not in target_ids
         ]
-        for pid, origin in leftovers:
-            if origin == "user_approved":
+        for pid, origin, user_defined in leftovers:
+            if origin == "user_approved" or user_defined:
                 result["kept_user_approved"].append(pid)
                 continue
             has_labels = conn.execute(

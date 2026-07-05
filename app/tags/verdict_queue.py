@@ -20,8 +20,10 @@ Ordering (Stage 0, no vectors yet):
      than 2 consecutive tracks by the same artist are emitted;
   3. tie-break — has public tags > none, then added_at DESC.
 
-Exclusions: verdict-skipped, inbox-dismissed (a dismissal is a judgement —
-"stop showing me this" — and leaves BOTH lenses), blocked_from_playlists,
+Exclusions: verdict-committed (a commit is a completed judgement — the card
+never re-serves; only undo clears the stamp), verdict-skipped, inbox-dismissed
+(a dismissal is a judgement — "stop showing me this" — and leaves BOTH
+lenses), blocked_from_playlists,
 do_not_recommend, quarantined, no playable id, and tracks already carrying a
 private_manual tag for the functional/personal layer (the "Where in a set?"
 question is answered).
@@ -129,6 +131,7 @@ def _era_prefill(year: int | None, raw_tags: list[dict]) -> str | None:
 _BASE_ELIGIBILITY = """
               (t.verdict_skipped_at IS NULL
                OR datetime(t.verdict_skipped_at) < datetime('now', '-14 days'))
+              AND t.verdict_committed_at IS NULL
               AND t.inbox_dismissed_at IS NULL
               AND t.blocked_from_playlists = 0
               AND t.do_not_recommend = 0
@@ -444,6 +447,33 @@ def skip_track(track_pk: str, db_path: str | None = None) -> dict:
         if result.rowcount == 0:
             raise ValueError(f"Track not found: {track_pk}")
     return {"track_pk": track_pk, "skipped": True}
+
+
+def commit_track(track_pk: str, db_path: str | None = None) -> dict:
+    """Stamp a Review commit — the card was judged and NEVER returns to either
+    lens (locked decision, 2026-07-05). Cleared only by uncommit_track (undo)."""
+    now = datetime.now(timezone.utc).isoformat()
+    with db_conn(db_path) as conn:
+        result = conn.execute(
+            "UPDATE tracks SET verdict_committed_at = ?, updated_at = ? WHERE track_pk = ?",
+            (now, now, track_pk),
+        )
+        if result.rowcount == 0:
+            raise ValueError(f"Track not found: {track_pk}")
+    return {"track_pk": track_pk, "committed": True}
+
+
+def uncommit_track(track_pk: str, db_path: str | None = None) -> dict:
+    """Clear the commit stamp (the undo path) so the track re-serves."""
+    now = datetime.now(timezone.utc).isoformat()
+    with db_conn(db_path) as conn:
+        result = conn.execute(
+            "UPDATE tracks SET verdict_committed_at = NULL, updated_at = ? WHERE track_pk = ?",
+            (now, track_pk),
+        )
+        if result.rowcount == 0:
+            raise ValueError(f"Track not found: {track_pk}")
+    return {"track_pk": track_pk, "committed": False}
 
 
 def unskip_all(db_path: str | None = None) -> dict:

@@ -49,7 +49,8 @@ LOCKED_TAG_ALIASES: dict[str, str] = {
     "post-punk": "rock",
     "pop rock": "rock",
     "pop/rock": "rock",
-    "pop rap": "hip hop",
+    # "pop rap" was folded into hip hop at the lock; PROMOTED to a subgenre
+    # profile 2026-07-05 (Matthias-approved one-off) — see LOCKED_TAG_PROMOTIONS.
     # The hip-hop/rap composite cluster — the handoff's "+3 more forms" were
     # enumerated from the prod copy during the migration rehearsal (2026-07-04).
     "hip hop rap": "hip hop",
@@ -78,7 +79,7 @@ LOCKED_TAG_ALIASES: dict[str, str] = {
     "synth pop": "synth-pop",
     "deep-house": "deep house",
     "contemporary r b": "contemporary r&b",
-    "pop-rap": "hip hop",               # straight to the final canonical, no chain
+    "pop-rap": "pop rap",               # spelling variant of the promoted subgenre
     "nu disco": "nu-disco",
     "neo-soul": "neo soul",
     "trip-hop": "trip hop",
@@ -111,20 +112,36 @@ LOCKED_TAG_HIDES: tuple[str, ...] = (
     "conscious",
 )
 
+# Tags PROMOTED into the profile vocabulary after the lock (Matthias-approved
+# one-offs). Any leftover alias/hide row for these is DELETED so the raw tag
+# surfaces as itself again — same mechanics as approving a vocab suggestion.
+LOCKED_TAG_PROMOTIONS: tuple[str, ...] = (
+    "pop rap",   # 2026-07-05: subgenre profile (hip hop family)
+)
+
 
 def reconcile_tag_vocabulary(db_path: str | None = None) -> dict:
     """
     Enforce the locked alias/hide rulings, then chain-flatten the whole table.
 
     Idempotent — called from init_db backfills on every deploy. Returns
-    {aliases_set, hides_set, chains_flattened, cycles} where the *_set counts
-    are rows actually changed (0 once settled) and cycles lists any alias
-    loops found (left untouched — data damage needs a human).
+    {aliases_set, hides_set, promotions_cleared, chains_flattened, cycles}
+    where the counts are rows actually changed (0 once settled) and cycles
+    lists any alias loops found (left untouched — data damage needs a human).
     """
     now = datetime.now(timezone.utc).isoformat()
-    result = {"aliases_set": 0, "hides_set": 0, "chains_flattened": 0, "cycles": []}
+    result = {"aliases_set": 0, "hides_set": 0, "promotions_cleared": 0,
+              "chains_flattened": 0, "cycles": []}
 
     with db_conn(db_path) as conn:
+        # Promotions first: a tag that became a profile must not stay folded
+        # away (its old alias row would hide it from the effective view).
+        for tag in LOCKED_TAG_PROMOTIONS:
+            cur = conn.execute(
+                "DELETE FROM tag_vocabulary WHERE tag = ?", (tag,)
+            )
+            result["promotions_cleared"] += cur.rowcount
+
         for tag in LOCKED_TAG_HIDES:
             cur = conn.execute(
                 "SELECT hidden, alias_to FROM tag_vocabulary WHERE tag = ?", (tag,)

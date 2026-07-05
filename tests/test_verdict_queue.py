@@ -104,9 +104,9 @@ def test_reconcile_seeds_locked_vocab_counts(db):
     finally:
         conn.close()
     counts = {r["taxonomy_layer"]: r["n"] for r in rows}
-    # The FINAL budget: 55 profiles (TAG-VOCAB-DESIGN.md, locked 2026-07-03).
+    # 55 at the 2026-07-03 lock + pop rap (2026-07-05 one-off) = 56.
     assert counts == {"functional": 8, "personal": 7, "family": 11,
-                      "subgenre": 24, "era": 5}
+                      "subgenre": 25, "era": 5}
 
 
 # ── Queue exclusions + ordering ────────────────────────────────────────────────

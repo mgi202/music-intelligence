@@ -102,6 +102,16 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tracks ADD COLUMN verdict_skipped_at TEXT")
         print("Migration applied: tracks.verdict_skipped_at")
 
+    # 2026-07-05 (Review live-test fixes): persistent commit stamp. A committed
+    # card never returns to either Review lens; only undo clears it.
+    if "verdict_committed_at" not in existing:
+        conn.execute("ALTER TABLE tracks ADD COLUMN verdict_committed_at TEXT")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tracks_verdict_committed "
+            "ON tracks(verdict_committed_at)"
+        )
+        print("Migration applied: tracks.verdict_committed_at")
+
     # 2026-07-04 (prefer-videos toggle): YTM's own Song↔Video counterpart,
     # resolved lazily at play time; checked_at caps lookups at one per track.
     if "official_video_id" not in existing:
@@ -232,6 +242,17 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tag_profiles ADD COLUMN parent_family TEXT")
         print("Migration applied: tag_profiles.parent_family")
 
+    # 2026-07-05 (FE vocab manager): user-owned profile marker + soft retire.
+    # user_defined rows are DB-authoritative — reconcile never drops or
+    # overwrites them; retired_at hides a profile from Review/readiness while
+    # keeping its tags and labels.
+    if tp_cols and "user_defined" not in tp_cols:
+        conn.execute(
+            "ALTER TABLE tag_profiles ADD COLUMN user_defined INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.execute("ALTER TABLE tag_profiles ADD COLUMN retired_at TEXT")
+        print("Migration applied: tag_profiles.user_defined + retired_at")
+
     # 2026-07-05 (video discovery): candidate kind — 'extended' feeds
     # playback_video_id (original pipeline), 'video' feeds official_video_id
     # (prefer-videos toggle, quality-checked against YTM's counterpart).
@@ -339,10 +360,12 @@ def _run_backfills(conn: sqlite3.Connection, db_path: str | None = None) -> None
     try:
         from app.tags.vocab_lock import reconcile_tag_vocabulary
         vsummary = reconcile_tag_vocabulary(db_path)
-        if any(vsummary[k] for k in ("aliases_set", "hides_set", "chains_flattened")):
+        if any(vsummary[k] for k in ("aliases_set", "hides_set",
+                                     "promotions_cleared", "chains_flattened")):
             print(
                 f"Reconciled tag_vocabulary: {vsummary['aliases_set']} aliases, "
                 f"{vsummary['hides_set']} hides, "
+                f"{vsummary['promotions_cleared']} promotions cleared, "
                 f"{vsummary['chains_flattened']} chains flattened"
             )
         if vsummary["cycles"]:

@@ -366,13 +366,13 @@ def test_api_reference_profiles_vocabulary(client, db):
     from app.playlists.utility import seed_starter_tag_profiles
     seed_starter_tag_profiles(db)
     rows = client.get("/api/reference/profiles").json()["profiles"]
-    # Locked vocab (TAG-VOCAB-DESIGN.md, 2026-07-03): the FINAL 55-profile budget.
-    assert len(rows) == 55
+    # Locked vocab: 55 at the 2026-07-03 lock + pop rap (2026-07-05 one-off) = 56.
+    assert len(rows) == 56
     layers = [r["taxonomy_layer"] for r in rows]
     assert layers == sorted(layers)  # ordered by layer for grouping
     from collections import Counter
     assert Counter(layers) == {"functional": 8, "personal": 7, "family": 11,
-                               "subgenre": 24, "era": 5}
+                               "subgenre": 25, "era": 5}
     assert all({"profile_id", "tag_name", "taxonomy_layer", "description"} <= r.keys() for r in rows)
 
 

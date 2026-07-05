@@ -48,7 +48,9 @@ async function loadTraining() {
 // never on rating alone.
 
 const VQ_FKEYS = ["q", "w", "e", "r", "t", "y", "u", "i"];   // functional chips, set order
-const VQ_PKEYS = ["a", "s", "d", "f", "g", "h", "j"];        // personal chips, display order
+// Personal chips, display order. k/l cover user-added profiles (vocab
+// manager); chips beyond the key run render without a hotkey (mouse/tap).
+const VQ_PKEYS = ["a", "s", "d", "f", "g", "h", "j", "k", "l"];
 const VQ_EKEYS = ["7", "8", "9", "0", "-"];                  // era chips — number row, decade order
 
 async function loadVerdict() {
@@ -186,7 +188,7 @@ function renderVerdict() {
 
   el.innerHTML = vqStrip() + `<div class="vq-wrap"><div><div class="vq-card">
     <div class="vq-head">
-      <button class="vq-play" onclick="vqPlay()" title="Play (space)">▶</button>
+      <button class="vq-play" id="vq-playbtn" onclick="vqPlay()" title="Play/Pause (space)">${vqIsCardPlaying() ? "⏸" : "▶"}</button>
       <div style="min-width:0">
         <div class="vq-title">${esc(t.title || "Untitled")}</div>
         <div class="vq-artist">${esc(t.artist || "")}</div>
@@ -234,13 +236,8 @@ function renderVerdict() {
     </div>
   </div>${vqSessionLogHtml()}</div>
   <div class="vq-railcol">${vqRailHtml()}${vqReadyPanelHtml()}</div></div>`;
-
-  // Auto-play so you can judge by ear immediately — but only when the CARD
-  // changed. Re-renders from rating/chip taps must not restart the track.
-  if (!state.isMobile && state.vqPlayedPk !== t.pk) {
-    state.vqPlayedPk = t.pk;
-    vqPlay();
-  }
+  // No auto-play (removed 2026-07-05): the card's ▶ and the rail are the only
+  // ways a track starts. vqPlayedPk still tracks which card the player is on.
 }
 
 // ── Up-next rail (R5): peek + jump + dismiss-without-listening ──
@@ -344,6 +341,9 @@ async function vqUndoVerdict(e) {
   if (e.kind === "nfm") {
     await api(`/api/tracks/${e.pk}/undismiss`, { method: "POST", body: "{}" });
   } else {
+    // Clear the commit stamp FIRST (and abort the undo if it fails) — it is
+    // what re-serves the track; tag/rating reversal below stays best-effort.
+    await api(`/api/tracks/${e.pk}/verdict/uncommit`, { method: "POST", body: "{}" });
     for (const tag of e.tags) {
       try { await api(`/api/tracks/${e.pk}/tags/${encodeURIComponent(tag)}`, { method: "DELETE" }); }
       catch (err) {}   // tag may already be gone — undo stays best-effort per tag
@@ -366,8 +366,20 @@ async function vqLogUndo(i) {
 
 function vqCard() { return state.vq[state.vqIndex]; }
 
+// Is the player currently PLAYING this card's track? Drives the ▶/⏸ symbol.
+function vqIsCardPlaying() {
+  const t = vqCard();
+  return !!(t && ytReady && currentPlayingPk() === t.pk
+            && ytPlayer.getPlayerState
+            && ytPlayer.getPlayerState() === YT.PlayerState.PLAYING);
+}
+
 function vqPlay() {
   const t = vqCard(); if (!t || !t.video_id) return;
+  // Card track already loaded → same pause/resume toggle as the space bar
+  // (loading again would restart the video). Otherwise load and play it.
+  if (ytReady && currentPlayingPk() === t.pk) { togglePlay(); return; }
+  state.vqPlayedPk = t.pk;
   play(t.video_id, `${t.artist} — ${t.title}`, t.pk, !!t.playback_video_id);
 }
 
@@ -428,6 +440,10 @@ async function vqCommit() {
       await api(`/api/tracks/${t.pk}/tags`, { method: "POST", body: JSON.stringify({ tag }) });
     }
   } catch (e) { toast("Some tags failed — moving on"); }
+  // Persistent commit stamp (2026-07-05): the track never re-serves in either
+  // lens. Stamped even if a tag post failed — the user judged the track.
+  try { await api(`/api/tracks/${t.pk}/verdict/commit`, { method: "POST", body: "{}" }); }
+  catch (e) {}
   const acceptedNames = [...t._sel.accepted].map(pid => {
     const s = (t.suggestions || []).find(x => x.profile_id === pid); return s ? s.tag_name : pid;
   });
@@ -602,6 +618,13 @@ function vqStartClock() {
 }
 function vqTickClock() {
   if (state.view !== "review") return;
+  // Keep the card's ▶/⏸ honest — playback state changes outside our renders
+  // (pause via space, track end, plays started elsewhere).
+  const btn = $("vq-playbtn");
+  if (btn) {
+    const sym = vqIsCardPlaying() ? "⏸" : "▶";
+    if (btn.textContent !== sym) btn.textContent = sym;
+  }
   const timeEl = $("vq-time"), fill = $("vq-pfill");
   const t = vqCard();
   if (!timeEl || !t || !ytReady || !ytPlayer.getDuration) return;
@@ -615,7 +638,7 @@ function vqTickClock() {
 
 // Keyboard (R3): full coverage — chips included. Review view only; never while
 // typing or with a modal open.
-//   q w e r t y u i = functional chips (set order) · a s d f g h j = personal
+//   q w e r t y u i = functional chips (set order) · a s d f g h j k l = personal
 //   7 8 9 0 - = era chips (70s/80s/90s/00s/modern — the number-row run)
 //   z/x/c/v = 1–4★ · 1/2/3 accept · ⇧1/2/3 reject · n = not for me · m = later
 //   b = reveal (guess-first) · space = play/pause · ⏎ = commit
