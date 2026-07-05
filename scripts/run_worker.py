@@ -2,7 +2,10 @@
 Background worker — the system's heartbeat on the home server.
 
 One pass runs seven isolated stages (a failure in one never blocks the rest):
-  1.  Ingest from YTM + takedown marking (2-scan rule)
+  1.  Ingest from YTM + takedown marking (2-scan rule). Night passes skip
+      this stage when the last completed full ingest is younger than
+      INGEST_MIN_INTERVAL_MINUTES (back-to-back passes don't re-pull the
+      whole library); day passes always ingest.
   2.  Enrich (TTL-aware metadata pipeline)
   2b. Extended-version discovery (rated set — YTM search + auto-apply/queue)
   3.  Playlist sync (guarded: snapshots, shrink guard, hash short-circuit)
@@ -99,6 +102,29 @@ def _flag(name: str, default: str = "1") -> bool:
     return os.getenv(name, default).strip() not in ("0", "false", "no", "")
 
 
+def _full_ingest_due(now: datetime) -> bool:
+    """Whether stage 1 (full YTM snapshot + every playlist) should run.
+
+    Night passes run back-to-back minutes apart — re-pulling the whole library
+    each pass is wasted YTM traffic. Gate: skip when the last COMPLETED full
+    ingest is younger than INGEST_MIN_INTERVAL_MINUTES (default 180). The
+    stamp lives in job_runs (detail.completed_at on 'full_ingest'), not
+    in-memory, so a worker restart mid-window doesn't force a re-ingest.
+    """
+    min_interval = int(os.getenv("INGEST_MIN_INTERVAL_MINUTES", "180"))
+    if min_interval <= 0:
+        return True
+    from app.jobs import runs
+    last = runs.get_detail("full_ingest").get("completed_at")
+    if not last:
+        return True
+    try:
+        last_dt = datetime.fromisoformat(last)
+    except ValueError:
+        return True
+    return (now - last_dt).total_seconds() / 60.0 >= min_interval
+
+
 def run_pass(pass_type: str = "day") -> None:
     """One full six-stage pass. Each stage is isolated."""
     from app.db.init_db import init_db
@@ -109,37 +135,54 @@ def run_pass(pass_type: str = "day") -> None:
     adapter = None
 
     # ── 1. Ingest from YTM + takedown marking ──
-    try:
-        from app.ingestion.ytm_adapter import YouTubeMusicAdapter
-        from app.ingestion.ledger import ingest_tokens, record_source_memberships
-
-        adapter = YouTubeMusicAdapter()
-        tokens = adapter.fetch_library_snapshot()
-        inserted, updated = ingest_tokens(tokens)
-        logger.info("Ingest: %d new, %d updated from YTM", inserted, updated)
-
-        # Source-playlist membership (must run AFTER ingest_tokens so videoIds
-        # have resolved to track_pks). Isolated: a failure here never blocks
-        # the rest of the ingest stage.
+    # Night passes skip the full ingest when a recent one already completed
+    # (see _full_ingest_due). Skipped passes must NOT stamp the takedown
+    # full-scan marker — the 2-scan rule counts only passes that scanned.
+    if pass_type == "night" and not _full_ingest_due(datetime.now(timezone.utc)):
+        logger.info(
+            "Ingest: skipped — last full ingest younger than %s min "
+            "(INGEST_MIN_INTERVAL_MINUTES)",
+            os.getenv("INGEST_MIN_INTERVAL_MINUTES", "180"),
+        )
+    else:
         try:
-            complete = getattr(adapter, "last_snapshot_complete", False)
-            m = record_source_memberships(
-                adapter.last_playlist_memberships, run_complete=complete
-            )
-            logger.info(
-                "Source-playlist membership: %d rows across %d playlists (complete=%s, stale pruned=%s)",
-                m, len(adapter.last_playlist_memberships), complete, complete,
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Source-playlist membership recording failed: %s", e)
+            from app.ingestion.ytm_adapter import YouTubeMusicAdapter
+            from app.ingestion.ledger import ingest_tokens, record_source_memberships
 
-        from app.ingestion import takedown
-        takedown.record_full_scan(pass_start)
-        marked = takedown.mark_takedowns()
-        if marked:
-            logger.info("Takedown: %d tracks newly marked missing from YTM", marked)
-    except Exception as e:
-        _alert("Ingest", e)
+            adapter = YouTubeMusicAdapter()
+            tokens = adapter.fetch_library_snapshot()
+            inserted, updated = ingest_tokens(tokens)
+            logger.info("Ingest: %d new, %d updated from YTM", inserted, updated)
+
+            # Source-playlist membership (must run AFTER ingest_tokens so videoIds
+            # have resolved to track_pks). Isolated: a failure here never blocks
+            # the rest of the ingest stage.
+            try:
+                complete = getattr(adapter, "last_snapshot_complete", False)
+                m = record_source_memberships(
+                    adapter.last_playlist_memberships, run_complete=complete
+                )
+                logger.info(
+                    "Source-playlist membership: %d rows across %d playlists (complete=%s, stale pruned=%s)",
+                    m, len(adapter.last_playlist_memberships), complete, complete,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Source-playlist membership recording failed: %s", e)
+
+            from app.ingestion import takedown
+            takedown.record_full_scan(pass_start)
+            marked = takedown.mark_takedowns()
+            if marked:
+                logger.info("Takedown: %d tracks newly marked missing from YTM", marked)
+
+            # Stamp completion LAST — a failed ingest re-runs next pass.
+            from app.jobs import runs
+            runs.merge_detail(
+                "full_ingest",
+                {"completed_at": datetime.now(timezone.utc).isoformat()},
+            )
+        except Exception as e:
+            _alert("Ingest", e)
 
     # ── 2. Enrich (TTL-aware) ──
     try:
