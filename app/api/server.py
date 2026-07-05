@@ -520,7 +520,7 @@ def reference_profiles():
     try:
         # sort_order: set order for functional chips (R2) — never alphabetical.
         rows = conn.execute(
-            "SELECT profile_id, tag_name, taxonomy_layer, description "
+            "SELECT profile_id, tag_name, taxonomy_layer, description, parent_family "
             "FROM tag_profiles "
             "ORDER BY taxonomy_layer, COALESCE(sort_order, 999), tag_name"
         ).fetchall()

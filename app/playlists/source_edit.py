@@ -35,6 +35,17 @@ def _log_removal(conn, track_pk, playlist_id, playlist_name,
     return cur.lastrowid
 
 
+def _track_video_id(track_pk: str, db_path=None) -> str:
+    """The track's own YTM id — fallback when an LM membership row lacks one."""
+    with db_conn(db_path) as conn:
+        r = conn.execute(
+            "SELECT ytm_track_id FROM tracks WHERE track_pk = ?", (track_pk,)
+        ).fetchone()
+    if not r or not r["ytm_track_id"]:
+        raise ValueError("Track has no YTM id")
+    return r["ytm_track_id"]
+
+
 def _resolve_ids_on_demand(track_pk: str, playlist_id: str, adapter, db_path):
     """Pre-backfill fallback: a membership row written before the v-id columns
     existed has no set_video_id. Resolve the videoId from the track and the
@@ -78,13 +89,18 @@ def remove_track_from_playlist(
 
     video_id, set_video_id = row["video_id"], row["set_video_id"]
     playlist_name = row["playlist_name"]
-    if not set_video_id:
-        video_id, set_video_id = _resolve_ids_on_demand(track_pk, playlist_id, adapter, db_path)
-
-    item = {"videoId": video_id}
-    if set_video_id:
-        item["setVideoId"] = set_video_id
-    status = adapter.remove_from_playlist(playlist_id, [item])
+    if playlist_id == "LM":
+        # Liked Music pseudo-playlist: 'remove' means unlike (Matthias, 5 Jul).
+        # No setVideoId exists or is needed; undo re-likes via add_track_to_playlist.
+        video_id = video_id or _track_video_id(track_pk, db_path)
+        status = adapter.unlike_song(video_id)
+    else:
+        if not set_video_id:
+            video_id, set_video_id = _resolve_ids_on_demand(track_pk, playlist_id, adapter, db_path)
+        item = {"videoId": video_id}
+        if set_video_id:
+            item["setVideoId"] = set_video_id
+        status = adapter.remove_from_playlist(playlist_id, [item])
 
     # Drop the local row only after YTM confirms (a raise above skips this),
     # and log the removal so it can be re-added later.
@@ -121,13 +137,18 @@ def remove_track_from_all_playlists(
     for r in rows:
         try:
             video_id, set_video_id = r["video_id"], r["set_video_id"]
-            if not set_video_id:
-                video_id, set_video_id = _resolve_ids_on_demand(
-                    track_pk, r["playlist_id"], adapter, db_path)
-            item = {"videoId": video_id}
-            if set_video_id:
-                item["setVideoId"] = set_video_id
-            adapter.remove_from_playlist(r["playlist_id"], [item])
+            if r["playlist_id"] == "LM":
+                # Liked Music: remove = unlike (see remove_track_from_playlist).
+                video_id = video_id or _track_video_id(track_pk, db_path)
+                adapter.unlike_song(video_id)
+            else:
+                if not set_video_id:
+                    video_id, set_video_id = _resolve_ids_on_demand(
+                        track_pk, r["playlist_id"], adapter, db_path)
+                item = {"videoId": video_id}
+                if set_video_id:
+                    item["setVideoId"] = set_video_id
+                adapter.remove_from_playlist(r["playlist_id"], [item])
             with db_conn(db_path) as conn:
                 conn.execute(
                     "DELETE FROM track_playlist_membership "
@@ -181,8 +202,13 @@ def add_track_to_playlist(
     if not video_id:
         raise ValueError("Track has no YTM id to re-add")
 
-    resp = adapter.add_to_playlist(playlist_id, [video_id])
-    set_video_id = _extract_set_video_id(resp)
+    if playlist_id == "LM":
+        # Undo of an unlike: re-like. Membership row re-created below as usual.
+        adapter.like_song(video_id)
+        set_video_id = None
+    else:
+        resp = adapter.add_to_playlist(playlist_id, [video_id])
+        set_video_id = _extract_set_video_id(resp)
     now = datetime.now(timezone.utc).isoformat()
     with db_conn(db_path) as conn:
         conn.execute(

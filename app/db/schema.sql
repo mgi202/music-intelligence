@@ -255,6 +255,9 @@ CREATE TABLE IF NOT EXISTS tag_profiles (
     -- must never drop them.
     origin              TEXT NOT NULL DEFAULT 'locked'
                             CHECK (origin IN ('locked', 'user_approved')),
+    -- 2026-07-05 (family-gated tagging): a subgenre's parent family tag_name.
+    -- NULL for family/functional/personal/era profiles.
+    parent_family       TEXT,
     created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

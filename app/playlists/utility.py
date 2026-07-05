@@ -361,87 +361,87 @@ LOCKED_TAG_PROFILES: list[dict] = [
      "context_terms": ["dancehall"]},
 
     # ── Subgenre — the precise layer (24, LOCKED 2026-07-03) ──
-    {"profile_id": "deep house", "sort_order": 0, "tag_name": "deep house", "taxonomy_layer": "subgenre",
+    {"profile_id": "deep house", "parent_family": "house", "sort_order": 0, "tag_name": "deep house", "taxonomy_layer": "subgenre",
      "description": "Warm, soulful house — smoky chords, subdued energy, "
                     "late-night warmth."},
-    {"profile_id": "tech house", "sort_order": 1, "tag_name": "tech house", "taxonomy_layer": "subgenre",
+    {"profile_id": "tech house", "parent_family": "house", "sort_order": 1, "tag_name": "tech house", "taxonomy_layer": "subgenre",
      "description": "House's groove with techno's stripped toolkit — chunky, "
                     "rolling, club-functional."},
-    {"profile_id": "progressive house", "sort_order": 2, "tag_name": "progressive house",
+    {"profile_id": "progressive house", "parent_family": "house", "sort_order": 2, "tag_name": "progressive house",
      "taxonomy_layer": "subgenre",
      "description": "Long-arc melodic house — layered builds that reward "
                     "patience."},
-    {"profile_id": "tribal house", "sort_order": 3, "tag_name": "tribal house", "taxonomy_layer": "subgenre",
+    {"profile_id": "tribal house", "parent_family": "house", "sort_order": 3, "tag_name": "tribal house", "taxonomy_layer": "subgenre",
      "description": "Percussion-first house — stacked drums and chant energy."},
-    {"profile_id": "garage house", "sort_order": 4, "tag_name": "garage house", "taxonomy_layer": "subgenre",
+    {"profile_id": "garage house", "parent_family": "house", "sort_order": 4, "tag_name": "garage house", "taxonomy_layer": "subgenre",
      "description": "The New Jersey/NYC lineage — gospel-tinged, swung, "
                     "piano-led house."},
-    {"profile_id": "uk garage", "sort_order": 5, "tag_name": "uk garage", "taxonomy_layer": "subgenre",
+    {"profile_id": "uk garage", "parent_family": "bass", "sort_order": 5, "tag_name": "uk garage", "taxonomy_layer": "subgenre",
      "description": "Swung 2-step shuffle, chopped vocals, sub-bass — the UK's "
                     "own garage.",
      "context_terms": ["ukg"]},
-    {"profile_id": "minimal", "sort_order": 6, "tag_name": "minimal", "taxonomy_layer": "subgenre",
+    {"profile_id": "minimal", "parent_family": "techno", "sort_order": 6, "tag_name": "minimal", "taxonomy_layer": "subgenre",
      "description": "Reduction as the point — sparse, loopy, microscopic club "
                     "music.",
      "context_terms": ["minimal techno"]},
-    {"profile_id": "electro", "sort_order": 7, "tag_name": "electro", "taxonomy_layer": "subgenre",
+    {"profile_id": "electro", "parent_family": "techno", "sort_order": 7, "tag_name": "electro", "taxonomy_layer": "subgenre",
      "description": "The electro style (808 robotic funk) AND its modern club "
                     "descendants — Discogs uses it for both; when unsure, judge "
                     "by ear."},
-    {"profile_id": "nu-disco", "sort_order": 8, "tag_name": "nu-disco", "taxonomy_layer": "subgenre",
+    {"profile_id": "nu-disco", "parent_family": "disco-funk", "sort_order": 8, "tag_name": "nu-disco", "taxonomy_layer": "subgenre",
      "description": "Disco re-tooled with modern production — loops, filters, "
                     "glitter."},
-    {"profile_id": "breakbeat", "sort_order": 9, "tag_name": "breakbeat", "taxonomy_layer": "subgenre",
+    {"profile_id": "breakbeat", "parent_family": "bass", "sort_order": 9, "tag_name": "breakbeat", "taxonomy_layer": "subgenre",
      "description": "Broken beats at club weight — breaks instead of "
                     "four-to-the-floor.",
      "context_terms": ["breaks"]},
-    {"profile_id": "drum and bass", "sort_order": 10, "tag_name": "drum and bass",
+    {"profile_id": "drum and bass", "parent_family": "bass", "sort_order": 10, "tag_name": "drum and bass",
      "taxonomy_layer": "subgenre",
      "description": "Fast broken beats over heavy sub-bass — jungle's "
                     "streamlined descendant.",
      "context_terms": ["drum n bass", "dnb", "drum & bass", "d&b"]},
-    {"profile_id": "dubstep", "sort_order": 11, "tag_name": "dubstep", "taxonomy_layer": "subgenre",
+    {"profile_id": "dubstep", "parent_family": "bass", "sort_order": 11, "tag_name": "dubstep", "taxonomy_layer": "subgenre",
      "description": "Half-time sway, huge sub-bass, space — the UK original."},
-    {"profile_id": "trance", "sort_order": 12, "tag_name": "trance", "taxonomy_layer": "subgenre",
+    {"profile_id": "trance", "parent_family": "techno", "sort_order": 12, "tag_name": "trance", "taxonomy_layer": "subgenre",
      "description": "Arpeggios, long builds and euphoric release at full "
                     "stretch."},
-    {"profile_id": "leftfield", "sort_order": 13, "tag_name": "leftfield", "taxonomy_layer": "subgenre",
+    {"profile_id": "leftfield", "parent_family": "techno", "sort_order": 13, "tag_name": "leftfield", "taxonomy_layer": "subgenre",
      "description": "Club-adjacent but off the grid — experimental electronics "
                     "with a pulse."},
-    {"profile_id": "downtempo", "sort_order": 14, "tag_name": "downtempo", "taxonomy_layer": "subgenre",
+    {"profile_id": "downtempo", "parent_family": "ambient", "sort_order": 14, "tag_name": "downtempo", "taxonomy_layer": "subgenre",
      "description": "Slow-burn electronic grooves — head-nod tempo, home "
                     "listening or comedown.",
      "context_terms": ["chillout", "chill out"]},
-    {"profile_id": "trip hop", "sort_order": 15, "tag_name": "trip hop", "taxonomy_layer": "subgenre",
+    {"profile_id": "trip hop", "parent_family": "ambient", "sort_order": 15, "tag_name": "trip hop", "taxonomy_layer": "subgenre",
      "description": "Dusty breaks, cinematic mood — the Bristol blueprint.",
      "context_terms": ["triphop"]},
-    {"profile_id": "synth-pop", "sort_order": 16, "tag_name": "synth-pop", "taxonomy_layer": "subgenre",
+    {"profile_id": "synth-pop", "parent_family": "pop", "sort_order": 16, "tag_name": "synth-pop", "taxonomy_layer": "subgenre",
      "description": "Synthesisers carrying the song — from new romantic to "
                     "modern electropop.",
      "context_terms": ["electropop", "new romantic", "synthpop"]},
-    {"profile_id": "new wave", "sort_order": 17, "tag_name": "new wave", "taxonomy_layer": "subgenre",
+    {"profile_id": "new wave", "parent_family": "rock", "sort_order": 17, "tag_name": "new wave", "taxonomy_layer": "subgenre",
      "description": "Post-punk gone pop — angular, synth-flecked late-70s/80s "
                     "guitar pop."},
-    {"profile_id": "contemporary r&b", "sort_order": 18, "tag_name": "contemporary r&b",
+    {"profile_id": "contemporary r&b", "parent_family": "r&b-soul", "sort_order": 18, "tag_name": "contemporary r&b",
      "taxonomy_layer": "subgenre",
      "description": "Modern R&B — smooth production, melisma, hip-hop-adjacent "
                     "beats.",
      "context_terms": ["contemporary r b"]},
-    {"profile_id": "trap", "sort_order": 19, "tag_name": "trap", "taxonomy_layer": "subgenre",
+    {"profile_id": "trap", "parent_family": "hip hop", "sort_order": 19, "tag_name": "trap", "taxonomy_layer": "subgenre",
      "description": "808s, rolling hi-hats, half-time bounce — modern rap "
                     "production."},
-    {"profile_id": "gangsta rap", "sort_order": 20, "tag_name": "gangsta rap", "taxonomy_layer": "subgenre",
+    {"profile_id": "gangsta rap", "parent_family": "hip hop", "sort_order": 20, "tag_name": "gangsta rap", "taxonomy_layer": "subgenre",
      "description": "Street-narrative rap — G-funk and its hard-edged "
                     "descendants.",
      "context_terms": ["gangsta"]},
-    {"profile_id": "neo soul", "sort_order": 21, "tag_name": "neo soul", "taxonomy_layer": "subgenre",
+    {"profile_id": "neo soul", "parent_family": "r&b-soul", "sort_order": 21, "tag_name": "neo soul", "taxonomy_layer": "subgenre",
      "description": "Soul revived with live warmth and hip-hop feel.",
      "context_terms": ["neosoul"]},
-    {"profile_id": "afro house", "sort_order": 22, "tag_name": "afro house", "taxonomy_layer": "subgenre",
+    {"profile_id": "afro house", "parent_family": "house", "sort_order": 22, "tag_name": "afro house", "taxonomy_layer": "subgenre",
      "description": "African rhythms driving house — organic percussion, vocal "
                     "chants, rolling groove.",
      "context_terms": ["afrohouse"]},
-    {"profile_id": "dream pop", "sort_order": 23, "tag_name": "dream pop", "taxonomy_layer": "subgenre",
+    {"profile_id": "dream pop", "parent_family": "pop", "sort_order": 23, "tag_name": "dream pop", "taxonomy_layer": "subgenre",
      "description": "Hazy, reverb-washed guitar pop — shoegaze folded in; "
                     "texture over riffs.",
      "context_terms": ["shoegaze"]},
@@ -586,9 +586,10 @@ def reconcile_tag_profiles(db_path: str | None = None) -> dict:
             if pid in existing:
                 conn.execute(
                     "UPDATE tag_profiles SET description = ?, taxonomy_layer = ?, "
-                    "sort_order = ?, updated_at = ? WHERE profile_id = ?",
+                    "sort_order = ?, parent_family = ?, updated_at = ? "
+                    "WHERE profile_id = ?",
                     (p["description"], p["taxonomy_layer"], p.get("sort_order"),
-                     now, pid),
+                     p.get("parent_family"), now, pid),
                 )
                 result["refreshed"].append(pid)
             else:
@@ -601,6 +602,10 @@ def reconcile_tag_profiles(db_path: str | None = None) -> dict:
                         sort_order, created_at, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     _profile_insert_params(p, now),
+                )
+                conn.execute(
+                    "UPDATE tag_profiles SET parent_family = ? WHERE profile_id = ?",
+                    (p.get("parent_family"), pid),
                 )
                 result["inserted"].append(pid)
                 existing.add(pid)

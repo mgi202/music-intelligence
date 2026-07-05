@@ -910,8 +910,9 @@ async function rate(pk, rating) {
   refreshBadges();   // rating retires a track from the Review "Newest" lens
 }
 
-// Layer display order + labels for the tap-palette.
-const LAYER_ORDER = ["subgenre", "functional", "personal", "family", "era"];
+// Layer display order + labels for the tap-palette. Family leads (Matthias,
+// 5 Jul): pick the family first, subgenres filter to it.
+const LAYER_ORDER = ["family", "subgenre", "functional", "personal", "era"];
 const LAYER_LABEL = { subgenre: "Subgenre", functional: "Function (set role)", personal: "Personal", family: "Family", era: "Era (sounds like)" };
 
 async function addTag(pk) {
@@ -952,17 +953,47 @@ async function addTag(pk) {
   document.body.appendChild(bg);
 
   // ── Palette ──────────────────────────────────────────────────────────────
+  // Subgenres are family-gated (Matthias, 5 Jul): a hip hop track never gets
+  // offered deep house. Active families = the track's effective family tags
+  // (any type — public counts) plus families tapped in this modal. No family
+  // yet → subgenres hide behind a pick-a-family hint. "show all styles" is the
+  // escape hatch for genuine cross-family hybrids (hip house etc.).
   const palette = bg.querySelector("#palette");
   const byLayer = {};
   state.profileList.forEach(p => { (byLayer[p.taxonomy_layer] ||= []).push(p); });
+  const familyNames = new Set((byLayer.family || []).map(p => p.tag_name.toLowerCase()));
+  const trackFams = new Set((t.tags || [])
+    .map(g => (g.tag || "").toLowerCase()).filter(x => familyNames.has(x)));
+  let showAllSubs = false;
+
   const renderPalette = () => {
+    const activeFams = new Set([...trackFams, ...[...manual].filter(x => familyNames.has(x))]);
     palette.innerHTML = LAYER_ORDER.filter(l => byLayer[l]).map(layer => {
-      const chips = byLayer[layer].map(p => {
+      let items = byLayer[layer];
+      let extra = "";
+      if (layer === "subgenre") {
+        if (!activeFams.size && !showAllSubs) {
+          return `<div class="playlbl">${LAYER_LABEL[layer]}</div>
+            <div class="hint">Pick a family above to see its styles —
+              <a href="#" id="subs-showall" style="color:var(--accent)">or show all styles</a></div>`;
+        }
+        if (!showAllSubs) {
+          items = items.filter(p => manual.has(p.tag_name.toLowerCase())
+            || !p.parent_family
+            || activeFams.has(p.parent_family.toLowerCase()));
+          extra = `<a href="#" id="subs-showall" class="hint" style="color:var(--dim);align-self:center">show all styles</a>`;
+        } else {
+          extra = `<a href="#" id="subs-showall" class="hint" style="color:var(--dim);align-self:center">only matching styles</a>`;
+        }
+      }
+      const chips = items.map(p => {
         const on = manual.has(p.tag_name.toLowerCase());
         return `<button class="chip ${on ? "active" : ""}" data-tag="${esc(p.tag_name)}">${on ? "✓ " : ""}${esc(p.tag_name)}</button>`;
       }).join("");
-      return `<div class="playlbl">${LAYER_LABEL[layer] || layer}</div><div class="palette-row">${chips}</div>`;
+      return `<div class="playlbl">${LAYER_LABEL[layer] || layer}</div><div class="palette-row">${chips}${extra}</div>`;
     }).join("") || '<div class="hint">No profiles seeded yet.</div>';
+    const sa = palette.querySelector("#subs-showall");
+    if (sa) sa.onclick = (e) => { e.preventDefault(); showAllSubs = !showAllSubs; renderPalette(); };
   };
   renderPalette();
 

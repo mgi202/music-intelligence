@@ -122,9 +122,27 @@ class YouTubeMusicAdapter(StreamingPlatformAdapter):
 
         try:
             liked = self.client.get_liked_songs(limit=None) or {}
-            _absorb(liked.get("tracks", []) if isinstance(liked, dict) else [])
+            liked_tracks = liked.get("tracks", []) if isinstance(liked, dict) else []
+            # Liked Music shows in the Home tree like any playlist (Matthias,
+            # 5 Jul). setVideoId is None: LM write-back is like/unlike
+            # (rate_song), never remove_playlist_items — see source_edit.
+            liked_items = {
+                it["videoId"]: None
+                for it in liked_tracks
+                if isinstance(it, dict) and it.get("videoId")
+            }
+            if liked_items:
+                self.last_playlist_memberships["LM"] = {
+                    "name": "Liked Music",
+                    "video_ids": set(liked_items),   # back-compat
+                    "items": liked_items,            # videoId -> setVideoId
+                }
+            _absorb(liked_tracks)
         except Exception as e:  # noqa: BLE001
             print(f"Warning: get_liked_songs failed: {e}")
+            # LM membership participates in the stale prune — a failed liked
+            # fetch must block pruning or it would wipe the LM rows.
+            self.last_snapshot_complete = False
 
         # ── Playlists: every user playlist, one bad playlist isolated ──
         try:
@@ -272,6 +290,14 @@ class YouTubeMusicAdapter(StreamingPlatformAdapter):
         return self.client.add_playlist_items(playlist_id, video_ids)
 
     # ── Official-video counterpart (prefer-videos toggle, 2026-07-04) ─────────
+
+    def unlike_song(self, video_id: str):
+        """Remove a track from Liked Music (the LM pseudo-playlist's 'remove')."""
+        return self.client.rate_song(video_id, "INDIFFERENT")
+
+    def like_song(self, video_id: str):
+        """Re-like a track — the Undo of unlike_song."""
+        return self.client.rate_song(video_id, "LIKE")
 
     def get_official_video_counterpart(self, video_id: str) -> str | None:
         """YTM's own Song↔Video toggle pairing for a track, if any.

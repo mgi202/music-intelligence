@@ -225,6 +225,13 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         )
         print("Migration applied: tag_profiles.origin")
 
+    # 2026-07-05 (family-gated tagging): a subgenre's parent family. Locked
+    # values live in LOCKED_TAG_PROFILES (reconcile refreshes them); approved
+    # vocab suggestions inherit their suggestion's family.
+    if tp_cols and "parent_family" not in tp_cols:
+        conn.execute("ALTER TABLE tag_profiles ADD COLUMN parent_family TEXT")
+        print("Migration applied: tag_profiles.parent_family")
+
     # 2026-07-05 (video discovery): candidate kind — 'extended' feeds
     # playback_video_id (original pipeline), 'video' feeds official_video_id
     # (prefer-videos toggle, quality-checked against YTM's counterpart).

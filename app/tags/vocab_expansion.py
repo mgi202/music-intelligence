@@ -298,12 +298,12 @@ def approve_suggestion(suggestion_id: int, db_path: str | None = None) -> dict:
         conn.execute(
             """INSERT INTO tag_profiles
                    (profile_id, tag_name, description, taxonomy_layer,
-                    sort_order, origin, created_at, updated_at)
-               VALUES (?, ?, ?, 'subgenre', ?, 'user_approved', ?, ?)""",
+                    sort_order, origin, parent_family, created_at, updated_at)
+               VALUES (?, ?, ?, 'subgenre', ?, 'user_approved', ?, ?, ?)""",
             (tag, tag,
              f"User-approved subgenre ({fam} family), promoted from library "
              f"tags via the vocabulary-suggestions queue.",
-             next_sort, now, now),
+             next_sort, row["family"], now, now),
         )
         conn.execute(
             "UPDATE vocab_suggestions SET status = 'approved', decided_at = ?, "
