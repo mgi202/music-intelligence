@@ -56,7 +56,10 @@ def enrich(
     _LIMITER.wait()
 
     tags = _fetch_top_tags(title, artist, mbid)
-    info = _fetch_track_info(title, artist, mbid)
+    # track.getInfo only adds listeners/playcount/mbid, which nothing consumes
+    # (checked 2026-07-05) — call it only as a match-confirmation fallback when
+    # top-tags came back empty. Halves Last.fm traffic on tagged tracks.
+    info = None if tags else _fetch_track_info(title, artist, mbid)
 
     if not tags and not info:
         return LastFmResult(matched=False)
