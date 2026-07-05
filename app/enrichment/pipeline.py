@@ -16,7 +16,8 @@ After enrichment:
       'public_metadata_weak'   if coverage is sparse or absent
       'metadata_enriched'      otherwise (≥ 1 source returned data)
 
-processing_events written for failures.
+processing_events: one 'enrichment' summary row per track, plus one row per
+source error. Routine per-source success/no_match rows are not written.
 """
 
 from __future__ import annotations
@@ -147,11 +148,18 @@ def run_pipeline(
 def _enrich_track(track: dict, db_path: str | None) -> str:
     """Run all enrichment sources for a single track and persist results.
 
-    MusicBrainz runs first and alone — its discovered ISRC/MBID feed the other
-    sources as lookup hints. The remaining four sources are independent
-    services and run concurrently; they only do network I/O and return their
-    results. All SQLite work happens on this (the calling) thread — SQLite
-    objects must not cross threads.
+    Network phase first: MusicBrainz runs alone (its discovered ISRC/MBID feed
+    the other sources as lookup hints), then ListenBrainz, Last.fm, Discogs and
+    Bandcamp fan out concurrently — threads only do HTTP and return results.
+
+    Persistence phase after the join: ALL SQLite work happens on this (the
+    calling) thread, on one connection committed once per track. SQLite
+    objects must not cross threads, and per-source commits were the
+    write-churn litestream replicates to B2 on every night pass.
+
+    Audit policy: one 'enrichment' summary event per track plus one event per
+    source *error*. Routine per-source success/no_match rows are gone —
+    nothing read them (checked 2026-07-05) and they were ~5 commits/track.
 
     Returns the track's new match_status."""
     pk = track["track_pk"]
@@ -164,51 +172,31 @@ def _enrich_track(track: dict, db_path: str | None) -> str:
     all_tags: list[dict] = []       # {"tag", "source", "confidence", "tag_type"}
     enrichment_flags: dict = {}
     source_count = 0                 # Sources that returned useful data
+    errors: list[tuple[str, str]] = []   # (source, message) → audit rows
 
-    # ── 1. MusicBrainz ───────────────────────────────────────────────────────
+    # ── Network phase ─────────────────────────────────────────────────────────
+    mb_result = None
+    mb_updates: dict = {}            # tracks-row updates persisted after the join
     try:
         mb_result = musicbrainz.enrich(title, artist, isrc=isrc, duration_ms=duration_ms)
         if mb_result.matched:
-            enrichment_flags["has_musicbrainz_data"] = 1
-            source_count += 1
-            # Update recording ID and ISRC on the track if we got them
-            with db_conn(db_path) as conn:
-                updates = {}
-                if mb_result.recording_id:
-                    updates["musicbrainz_recording_id"] = mb_result.recording_id
-                    mb_recording_id = mb_result.recording_id
-                if mb_result.isrc and not isrc:
-                    updates["isrc"] = mb_result.isrc
-                    isrc = mb_result.isrc
-                # Era layer input: ingested dates (CSV) win over MB search
-                # results, so only fill the gap, never overwrite.
-                if mb_result.release_date and not track.get("release_date"):
-                    updates["release_date"] = mb_result.release_date
-                if updates:
-                    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-                    set_clause = ", ".join(f"{k} = ?" for k in updates)
-                    conn.execute(
-                        f"UPDATE tracks SET {set_clause} WHERE track_pk = ?",
-                        list(updates.values()) + [pk],
-                    )
-                # Identity reconciliation: a discovered ISRC/MBID may collide
-                # with an existing track → exact-match merge (keep older).
-                # Otherwise register the identity as an alias. pk may change to
-                # the surviving track if the current row was the duplicate.
-                pk = _reconcile_identity(pk, isrc, mb_recording_id, conn)
-                # Capture artists + labels from MB credits (no extra API calls).
-                _capture_artists_labels(pk, mb_result, conn)
-            _log_event(pk, "musicbrainz", "success", f"MBID={mb_result.recording_id}", db_path)
-        else:
-            _log_event(pk, "musicbrainz", "no_match", "No MusicBrainz result", db_path)
+            if mb_result.recording_id:
+                mb_updates["musicbrainz_recording_id"] = mb_result.recording_id
+                mb_recording_id = mb_result.recording_id
+            if mb_result.isrc and not isrc:
+                mb_updates["isrc"] = mb_result.isrc
+                isrc = mb_result.isrc
+            # Era layer input: ingested dates (CSV) win over MB search
+            # results, so only fill the gap, never overwrite.
+            if mb_result.release_date and not track.get("release_date"):
+                mb_updates["release_date"] = mb_result.release_date
     except Exception as e:
-        _log_event(pk, "musicbrainz", "error", str(e), db_path)
+        errors.append(("musicbrainz", str(e)))
 
-    # ── 2–5. ListenBrainz / Last.fm / Discogs / Bandcamp ─────────────────────
-    # Independent services — fan the network calls out concurrently, then
-    # process every result (all SQLite work) back on this thread after the
-    # join. The lambdas resolve module attributes at call time so test
-    # monkeypatching of <module>.enrich still applies.
+    # The lambdas resolve module attributes at call time so test monkeypatching
+    # of <module>.enrich still applies. Bandcamp is only fetched when the track
+    # has a stored URL (set manually or by the nightly search sweep) — no
+    # auto-search at scale.
     bc_url = track.get("bandcamp_url")
     with ThreadPoolExecutor(max_workers=4) as pool:
         lb_future = pool.submit(
@@ -220,10 +208,49 @@ def _enrich_track(track: dict, db_path: str | None) -> str:
         bc_future = pool.submit(
             lambda: bandcamp.enrich(title, artist, manual_url=bc_url)) if bc_url else None
 
-    # ── ListenBrainz results ──
+    lb_result = lfm_result = dg_result = bc_result = None
     try:
         lb_result = lb_future.result()
-        if lb_result.matched:
+    except Exception as e:
+        errors.append(("listenbrainz", str(e)))
+    try:
+        lfm_result = lfm_future.result()
+    except Exception as e:
+        errors.append(("lastfm", str(e)))
+    try:
+        dg_result = dg_future.result()
+    except Exception as e:
+        errors.append(("discogs", str(e)))
+    if bc_url:
+        try:
+            bc_result = bc_future.result()
+        except Exception as e:
+            errors.append(("bandcamp", str(e)))
+
+    # ── Persistence phase: one connection, one commit ─────────────────────────
+    now = datetime.now(timezone.utc).isoformat()
+    with db_conn(db_path) as conn:
+        # MusicBrainz
+        if mb_result is not None and mb_result.matched:
+            enrichment_flags["has_musicbrainz_data"] = 1
+            source_count += 1
+            if mb_updates:
+                mb_updates["updated_at"] = now
+                set_clause = ", ".join(f"{k} = ?" for k in mb_updates)
+                conn.execute(
+                    f"UPDATE tracks SET {set_clause} WHERE track_pk = ?",
+                    list(mb_updates.values()) + [pk],
+                )
+            # Identity reconciliation: a discovered ISRC/MBID may collide
+            # with an existing track → exact-match merge (keep older).
+            # Otherwise register the identity as an alias. pk may change to
+            # the surviving track if the current row was the duplicate.
+            pk = _reconcile_identity(pk, isrc, mb_recording_id, conn)
+            # Capture artists + labels from MB credits (no extra API calls).
+            _capture_artists_labels(pk, mb_result, conn)
+
+        # ListenBrainz
+        if lb_result is not None and lb_result.matched:
             enrichment_flags["has_listenbrainz_data"] = 1
             if lb_result.tags:
                 enrichment_flags["has_community_tags"] = 1
@@ -234,59 +261,41 @@ def _enrich_track(track: dict, db_path: str | None) -> str:
                         "confidence": min(1.0, t.get("count", 1) / 100.0),
                         "tag_type": "public",
                     })
-            # Store MSID if obtained
             if lb_result.recording_msid:
-                with db_conn(db_path) as conn:
-                    conn.execute(
-                        "UPDATE tracks SET listenbrainz_recording_msid = ?, updated_at = ? WHERE track_pk = ?",
-                        (lb_result.recording_msid, datetime.now(timezone.utc).isoformat(), pk),
-                    )
-            _log_event(pk, "listenbrainz", "success", f"tags={len(lb_result.tags)}", db_path)
-        else:
-            _log_event(pk, "listenbrainz", "no_match", "", db_path)
-    except Exception as e:
-        _log_event(pk, "listenbrainz", "error", str(e), db_path)
+                conn.execute(
+                    "UPDATE tracks SET listenbrainz_recording_msid = ?, updated_at = ? WHERE track_pk = ?",
+                    (lb_result.recording_msid, now, pk),
+                )
 
-    # ── Last.fm results ──
-    try:
-        lfm_result = lfm_future.result()
-        if lfm_result.matched:
+        # Last.fm
+        if lfm_result is not None and lfm_result.matched:
             enrichment_flags["has_lastfm_data"] = 1
             if lfm_result.tags:
                 enrichment_flags["has_community_tags"] = 1
                 source_count += 1
                 for t in lfm_result.tags:
-                    norm_count = min(1.0, t.get("count", 0) / 100.0)
                     all_tags.append({
                         "tag": t["tag"], "source": "lastfm",
-                        "confidence": norm_count,
+                        "confidence": min(1.0, t.get("count", 0) / 100.0),
                         "tag_type": "public",
                     })
-            _log_event(pk, "lastfm", "success", f"tags={len(lfm_result.tags)}", db_path)
-        else:
-            _log_event(pk, "lastfm", "no_match", "", db_path)
-    except Exception as e:
-        _log_event(pk, "lastfm", "error", str(e), db_path)
 
-    # ── Discogs results ──
-    try:
-        dg_result = dg_future.result()
-        if dg_result.matched:
+        # Discogs
+        if dg_result is not None and dg_result.matched:
             enrichment_flags["has_discogs_data"] = 1
             # Capture the label + catalogue number (2026-07-03) — this data was
             # in the response all along and previously discarded. No extra call.
             if dg_result.label:
-                with db_conn(db_path) as conn:
-                    label_id = _entity_id(dg_result.label, None)
-                    conn.execute(
-                        "INSERT OR IGNORE INTO labels (label_id, name) VALUES (?, ?)",
-                        (label_id, dg_result.label),
-                    )
-                    conn.execute(
-                        "INSERT OR IGNORE INTO track_labels (track_pk, label_id, catalogue_number) "
-                        "VALUES (?, ?, ?)",
-                        (pk, label_id, getattr(dg_result, "catalogue_number", None)),
-                    )
+                label_id = _entity_id(dg_result.label, None)
+                conn.execute(
+                    "INSERT OR IGNORE INTO labels (label_id, name) VALUES (?, ?)",
+                    (label_id, dg_result.label),
+                )
+                conn.execute(
+                    "INSERT OR IGNORE INTO track_labels (track_pk, label_id, catalogue_number) "
+                    "VALUES (?, ?, ?)",
+                    (pk, label_id, getattr(dg_result, "catalogue_number", None)),
+                )
             tag_list = dg_result.genres + dg_result.styles
             if tag_list:
                 enrichment_flags["has_community_tags"] = 1
@@ -297,55 +306,45 @@ def _enrich_track(track: dict, db_path: str | None) -> str:
                         "confidence": dg_result.confidence,
                         "tag_type": "public",
                     })
-            _log_event(pk, "discogs", "success", f"genres={len(dg_result.genres)}, styles={len(dg_result.styles)}", db_path)
+
+        # Bandcamp — checked_at is stamped on EVERY attempt (with or without a
+        # URL): the zero-match retry cooldown keys on it.
+        enrichment_flags["bandcamp_checked_at"] = now
+        if bc_result is not None and bc_result.matched:
+            enrichment_flags["has_bandcamp_data"] = 1
+            if bc_result.tags:
+                source_count += 1
+                for tag in bc_result.tags:
+                    all_tags.append({
+                        "tag": tag, "source": "bandcamp",
+                        "confidence": bc_result.confidence,
+                        "tag_type": "public",
+                    })
         else:
-            _log_event(pk, "discogs", "no_match", "", db_path)
-    except Exception as e:
-        _log_event(pk, "discogs", "error", str(e), db_path)
-
-    # ── Bandcamp results (best-effort) ──
-    # Bandcamp has no catalogue API and is not auto-searched here. When the
-    # track has no stored URL we skip the network call entirely and just record
-    # unavailability on the enrichment_state (flag only — NO per-track
-    # processing_event, which would flood the audit log on every pass).
-    # tracks.bandcamp_url is set manually or by the nightly search sweep
-    # (app.jobs.bandcamp_sweep), so a swept track keeps its Bandcamp tags
-    # through every future re-enrichment.
-    if bc_url:
-        try:
-            bc_result = bc_future.result()
-            if bc_result.matched:
-                enrichment_flags["has_bandcamp_data"] = 1
-                enrichment_flags["bandcamp_checked_at"] = datetime.now(timezone.utc).isoformat()
-                if bc_result.tags:
-                    source_count += 1
-                    for tag in bc_result.tags:
-                        all_tags.append({
-                            "tag": tag, "source": "bandcamp",
-                            "confidence": bc_result.confidence,
-                            "tag_type": "public",
-                        })
-                _log_event(pk, "bandcamp", "success", f"tags={len(bc_result.tags)}", db_path)
-            else:
-                enrichment_flags["bandcamp_unavailable"] = 1
-                enrichment_flags["bandcamp_checked_at"] = datetime.now(timezone.utc).isoformat()
-                _log_event(pk, "bandcamp", "unavailable", bc_result.notes or "", db_path)
-        except Exception as e:
             enrichment_flags["bandcamp_unavailable"] = 1
-            enrichment_flags["bandcamp_checked_at"] = datetime.now(timezone.utc).isoformat()
-            _log_event(pk, "bandcamp", "error", str(e), db_path)
-    else:
-        enrichment_flags["bandcamp_unavailable"] = 1
-        enrichment_flags["bandcamp_checked_at"] = datetime.now(timezone.utc).isoformat()
 
-    # ── Persist tags + update state ───────────────────────────────────────────
-    with db_conn(db_path) as conn:
+        # Audit: per-source errors + one per-track summary. Audit failure must
+        # never fail the track (the rest of the transaction still commits).
+        try:
+            for source, msg in errors:
+                _insert_event(conn, pk, source, "error", msg)
+            _insert_event(
+                conn, pk, "enrichment", "summary",
+                f"mb={int(bool(mb_result and mb_result.matched))} "
+                f"lb={int(bool(lb_result and lb_result.matched))} "
+                f"lfm={int(bool(lfm_result and lfm_result.matched))} "
+                f"dg={int(bool(dg_result and dg_result.matched))} "
+                f"bc={int(bool(bc_result and bc_result.matched))}",
+            )
+        except Exception:
+            pass
+
         _write_tags(pk, all_tags, conn)
         _update_enrichment_state(pk, enrichment_flags, conn)
         new_status = _determine_status(source_count, all_tags)
         conn.execute(
             "UPDATE tracks SET match_status = ?, updated_at = ? WHERE track_pk = ?",
-            (new_status, datetime.now(timezone.utc).isoformat(), pk),
+            (new_status, now, pk),
         )
     return new_status
 
@@ -537,6 +536,24 @@ def _determine_status(source_count: int, tags: list[dict]) -> str:
     return "metadata_enriched"
 
 
+def _insert_event(
+    conn: sqlite3.Connection,
+    track_pk: str,
+    event_type: str,
+    status: str,
+    message: str,
+    payload: dict | None = None,
+) -> None:
+    """Write a processing event on an existing connection (no commit)."""
+    conn.execute("""
+        INSERT INTO processing_events (track_pk, event_type, status, message, payload_json)
+        VALUES (?, ?, ?, ?, ?)
+    """, (
+        track_pk, event_type, status, message,
+        json.dumps(payload) if payload else None,
+    ))
+
+
 def _log_event(
     track_pk: str,
     event_type: str,
@@ -545,15 +562,9 @@ def _log_event(
     db_path: str | None,
     payload: dict | None = None,
 ) -> None:
-    """Write a processing event to the audit log."""
+    """Write a processing event to the audit log (own connection + commit)."""
     try:
         with db_conn(db_path) as conn:
-            conn.execute("""
-                INSERT INTO processing_events (track_pk, event_type, status, message, payload_json)
-                VALUES (?, ?, ?, ?, ?)
-            """, (
-                track_pk, event_type, status, message,
-                json.dumps(payload) if payload else None,
-            ))
+            _insert_event(conn, track_pk, event_type, status, message, payload)
     except Exception:
         pass  # Audit log failure must not propagate

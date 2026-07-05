@@ -144,6 +144,53 @@ def test_no_stall_alarm_when_progress(db, monkeypatch):
     assert alerts == []
 
 
+def test_processing_events_one_summary_row_per_track(db, monkeypatch):
+    """Routine passes write ONE summary event per track, not per-source rows
+    (write-churn fix, 2026-07-05)."""
+    _no_match_sources(monkeypatch)
+
+    with db_conn(db) as conn:
+        insert_track(conn, "t1", match_status="metadata_only")
+        insert_track(conn, "t2", match_status="metadata_only")
+
+    run_pipeline(limit=10, db_path=db)
+
+    with db_conn(db) as conn:
+        rows = conn.execute(
+            "SELECT track_pk, event_type, status, message FROM processing_events "
+            "ORDER BY track_pk").fetchall()
+    assert len(rows) == 2
+    for row in rows:
+        assert row["event_type"] == "enrichment"
+        assert row["status"] == "summary"
+        assert row["message"] == "mb=0 lb=0 lfm=0 dg=0 bc=0"
+
+
+def test_processing_events_error_rows_kept(db, monkeypatch):
+    """A source that raises still gets its own error audit row."""
+    _no_match_sources(monkeypatch)
+
+    def boom(*a, **k):
+        raise RuntimeError("api down")
+
+    monkeypatch.setattr(discogs, "enrich", boom)
+    monkeypatch.setattr(lastfm, "enrich", lambda *a, **k: lastfm.LastFmResult(
+        matched=True, tags=[{"tag": "techno", "count": 90}]))
+
+    with db_conn(db) as conn:
+        insert_track(conn, "t1", match_status="metadata_only")
+
+    run_pipeline(limit=10, db_path=db)
+
+    with db_conn(db) as conn:
+        rows = {r["event_type"]: r for r in conn.execute(
+            "SELECT event_type, status, message FROM processing_events").fetchall()}
+    assert len(rows) == 2
+    assert rows["discogs"]["status"] == "error"
+    assert "api down" in rows["discogs"]["message"]
+    assert rows["enrichment"]["message"] == "mb=0 lb=0 lfm=1 dg=0 bc=0"
+
+
 def test_worker_batch_size_env_names(monkeypatch):
     """ENRICHMENT_BATCH_SIZE is authoritative; legacy ENRICH_BATCH_SIZE falls
     back. Night passes read their own knob (overnight-jobs build)."""
