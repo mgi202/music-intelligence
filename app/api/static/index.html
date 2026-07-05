@@ -88,9 +88,9 @@
   .stars button.lit { color: var(--accent); }
 
   .tagrow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
-  .tagrow .tag, .tmid .tag, .pb-tags .tag { font-size: 10.5px; padding: 2px 8px; border-radius: 999px; background: var(--panel2); color: var(--dim); }
-  .tagrow .tag.manual, .tmid .tag.manual, .pb-tags .tag.manual { background: #2a2a14; color: var(--accent); }
-  .tagrow .addtag, .tmid .addtag, .pb-tags .addtag { font-size: 10.5px; padding: 2px 8px; border-radius: 999px; background: none; border: 1px dashed #3a3a48; color: var(--dim); cursor: pointer; }
+  .tagrow .tag, .tmid .tag, #pb-tags .tag { font-size: 10.5px; padding: 2px 8px; border-radius: 999px; background: var(--panel2); color: var(--dim); }
+  .tagrow .tag.manual, .tmid .tag.manual, #pb-tags .tag.manual { background: #2a2a14; color: var(--accent); }
+  .tagrow .addtag, .tmid .addtag, #pb-tags .addtag { font-size: 10.5px; padding: 2px 8px; border-radius: 999px; background: none; border: 1px dashed #3a3a48; color: var(--dim); cursor: pointer; }
 
   .loadmore { width: 100%; padding: 12px; background: var(--panel); border: 1px solid #2b2b38; color: var(--dim); border-radius: var(--radius); cursor: pointer; margin: 6px 0 20px; }
   .empty { text-align: center; color: var(--dim); padding: 40px 0; font-size: 14px; }
@@ -106,9 +106,10 @@
   .newpl { width: 100%; padding: 12px; border: 1px dashed #3a3a48; background: none; color: var(--dim); border-radius: var(--radius); cursor: pointer; font-size: 14px; margin-bottom: 10px; }
 
   /* App title strip — always the very first thing on the page. */
-  #apptitle { padding: 12px 14px 0; }
+  #apptitle { padding: 12px 14px 0; display: flex; align-items: center; justify-content: space-between; }
   #apptitle h1 { font-size: 15px; letter-spacing: 2px; text-transform: uppercase; color: var(--accent); }
   #apptitle h1 span { color: var(--dim); font-weight: 400; }
+  #apptitle .refreshbtn { width: 28px; height: 28px; font-size: 14px; line-height: 1; }
 
   /* Player hero — Home only. On every other tab the player is fully hidden
      but the YT iframe keeps playing (display toggling never reparents it,
@@ -162,6 +163,9 @@
   .midrow:last-child { border-bottom: none; }
   .midrow .m { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .midrow .a { color: var(--dim); }
+  .midrow .dj { flex: 0 0 auto; color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; margin: 0 6px; }
+  .midrow .dj.dim { opacity: .35; }
+  @media (max-width: 760px) { .midrow .dj.dim { display: none; } }
   .midrow.playing { box-shadow: inset 3px 0 0 var(--accent); }
   .midrow .stars button { font-size: 14px; padding: 1px; }
   .midrow .mic { background: none; border: none; color: var(--dim); cursor: pointer; font-size: 15px; line-height: 1; padding: 2px; }
@@ -430,7 +434,8 @@
 </head>
 <body>
 
-<div id="apptitle"><h1>Music Intelligence <span id="trackcount"></span></h1></div>
+<div id="apptitle"><h1>Music Intelligence <span id="trackcount"></span></h1>
+  <button class="refreshbtn" id="refreshbtn" title="Reload — fetch the latest app + data" onclick="location.reload()">⟳</button></div>
 
 <!-- Player hero: Home only (hidden but still audible on other tabs). One DOM
      node — never reparent it, the YT iframe would reload and stop playback. -->
@@ -466,7 +471,6 @@
 <header>
   <div class="searchrow">
     <input id="search" type="search" placeholder="Search title, artist, album, tag…" autocomplete="off">
-    <button class="refreshbtn" id="refreshbtn" title="Reload — fetch the latest app + data" onclick="location.reload()">⟳</button>
   </div>
   <div class="facetrow" id="facetrow" style="display:none"></div>
   <div class="sumbar" id="sumbar" style="display:none"></div>
@@ -691,6 +695,9 @@ async function trackMenu(pk) {
       ${t.blocked_from_playlists ? "Unblock" : "Block from playlists"}</button>
     <button onclick="setFlag('${pk}','do_not_recommend',${t.do_not_recommend ? 0 : 1});this.closest('.menu').remove()">
       ${t.do_not_recommend ? "Allow recommending" : "Don't recommend"}</button>
+    ${(t.playlists || []).map(p =>
+      `<button onclick="removeFromPlaylist('${pk}','${esc(p.playlist_id)}');this.closest('.menu').remove()">
+         Remove from “${esc(p.playlist_name)}”</button>`).join("")}
     <button onclick="removeFromAllPlaylists('${pk}');this.closest('.menu').remove()">Remove from all my YTM playlists</button>
     <button class="danger" onclick="wrongMatch('${pk}');this.closest('.menu').remove()">Wrong match (quarantine)</button>
     <button onclick="this.closest('.menu').remove()">Cancel</button>
@@ -1800,12 +1807,24 @@ function renderMid() {
   highlightPlaying(currentPlayingPk());
 }
 
+// DJ readout: BPM · Camelot key · energy (E0–E10). Data arrives with Stage 1
+// audio enrichment — until then the slot renders as a dim placeholder, so the
+// mix-relevant column exists from day one and simply fills in.
+function djReadout(t) {
+  const has = t.bpm != null || t.camelot_key || t.energy != null;
+  if (!has) return '<span class="dj dim" title="BPM · Camelot key · energy — fills in when Stage 1 audio analysis runs">– · – · –</span>';
+  const e = t.energy != null ? "E" + Math.round(t.energy * 10) : "–";
+  return `<span class="dj" title="BPM · Camelot key · energy">${
+    t.bpm != null ? Math.round(t.bpm) : "–"} · ${esc(t.camelot_key || "–")} · ${e}</span>`;
+}
+
 function midRow(t) {
   const ext = t.playback_video_id
     ? ' <span style="color:var(--accent);font-size:10px" title="plays a set extended/video version">ext</span>' : "";
   return `<div class="midrow" id="mr-${t.track_pk}">
     <button class="playbtn" ${playableId(t) ? "" : "disabled"} onclick="playFromList('${t.track_pk}')" title="Play from here"><i class="ti ti-player-play"></i></button>
     <span class="m">${esc(t.canonical_title)}${ext} <span class="a">· ${esc(t.canonical_artist)}</span></span>
+    ${djReadout(t)}
     ${starButtons(t)}
     <button class="mic" onclick="queueAdd('${t.track_pk}')" title="Add to queue"><i class="ti ti-circle-plus"></i></button>
     <button class="mic" onclick="trackMenu('${t.track_pk}')" title="more"><i class="ti ti-dots"></i></button>

@@ -227,10 +227,11 @@ def list_tracks(
                        t.personal_rating, t.rated_at, t.match_status, t.created_at,
                        t.blocked_from_playlists, t.do_not_recommend, t.missing_since,
                        t.playback_video_id, t.inbox_dismissed_at,
+                       af.bpm, af.camelot_key, af.energy,
                        (SELECT COUNT(*) FROM playback_version_candidates c
                          WHERE c.track_pk = t.track_pk AND c.status = 'pending')
                            AS pending_version_count
-                FROM tracks t WHERE {where}
+                FROM tracks t {_AF_JOIN} WHERE {where}
                 ORDER BY {order} LIMIT ? OFFSET ?""",
             params + [limit, offset],
         ).fetchall()
@@ -304,7 +305,24 @@ def get_track(track_pk: str):
         if not row:
             raise HTTPException(404, "Track not found")
         track = dict(row)
-        track["tags"] = tag_manager.list_tags(track_pk)
+        # Effective tags (alias-folded, hidden + rejected removed, deduped) —
+        # the same view the Library list uses, so the hero player can't show
+        # duplicates or tags the user has hidden.
+        track["tags"] = [
+            dict(r) for r in conn.execute(
+                """SELECT tag, tag_type FROM effective_track_tags
+                   WHERE track_pk = ? ORDER BY type_rank, tag""",
+                (track_pk,),
+            )
+        ]
+        track["playlists"] = [
+            dict(r) for r in conn.execute(
+                """SELECT m.playlist_id, m.playlist_name
+                   FROM track_playlist_membership m
+                   WHERE m.track_pk = ? ORDER BY m.playlist_name""",
+                (track_pk,),
+            )
+        ]
         es = conn.execute(
             "SELECT * FROM enrichment_state WHERE track_pk = ?", (track_pk,)
         ).fetchone()
@@ -723,7 +741,13 @@ def unpin_playlist(playlist_id: str):
 
 _QUEUE_TRACK_FIELDS = """t.track_pk, t.canonical_title, t.canonical_artist,
                          t.album_title, t.ytm_track_id, t.playback_video_id,
-                         t.personal_rating, t.duration_ms"""
+                         t.personal_rating, t.duration_ms,
+                         af.bpm, af.camelot_key, af.energy"""
+
+# Every query using _QUEUE_TRACK_FIELDS must include this join. The DJ readout
+# (BPM · Camelot · energy) renders in the Home rows the moment Stage 1 audio
+# enrichment starts filling audio_features — NULL until then.
+_AF_JOIN = "LEFT JOIN audio_features af ON af.track_pk = t.track_pk"
 
 
 @app.get("/api/queue")
@@ -736,6 +760,7 @@ def get_queue():
         rows = conn.execute(
             f"""SELECT q.position, {_QUEUE_TRACK_FIELDS}
                 FROM play_queue q JOIN tracks t ON t.track_pk = q.track_pk
+                {_AF_JOIN}
                 ORDER BY q.position"""
         ).fetchall()
         mirror = conn.execute("SELECT * FROM queue_mirror WHERE id = 1").fetchone()
@@ -876,6 +901,7 @@ def forgotten_gems(months: int = Query(6, ge=1, le=36), limit: int = Query(40, l
             f"""SELECT {_QUEUE_TRACK_FIELDS}, MAX(l.listened_at) AS last_listened
                 FROM tracks t
                 LEFT JOIN listens l ON l.track_pk = t.track_pk
+                {_AF_JOIN}
                 WHERE t.personal_rating >= 3
                 GROUP BY t.track_pk
                 HAVING last_listened IS NULL
@@ -1432,11 +1458,13 @@ def recent_listens(limit: int = Query(10, ge=1, le=50)):
     conn = get_connection()
     try:
         rows = conn.execute(
-            """SELECT l.listened_at, l.source, t.track_pk, t.canonical_title,
+            f"""SELECT l.listened_at, l.source, t.track_pk, t.canonical_title,
                       t.canonical_artist, t.album_title, t.ytm_track_id,
-                      t.playback_video_id, t.personal_rating, t.duration_ms
+                      t.playback_video_id, t.personal_rating, t.duration_ms,
+                      af.bpm, af.camelot_key, af.energy
                FROM listens l
                JOIN tracks t ON t.track_pk = l.track_pk
+               {_AF_JOIN}
                WHERE l.track_pk IS NOT NULL
                GROUP BY t.track_pk
                ORDER BY MAX(l.listened_at) DESC
