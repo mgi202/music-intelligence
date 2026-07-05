@@ -1631,8 +1631,8 @@ def health():
 @app.get("/")
 def index():
     # No-store so the browser never serves a stale cached UI after a deploy —
-    # the single-file app is tiny, and this is what makes updates show up on a
-    # normal reload/reopen instead of needing a hard refresh.
+    # the shell is tiny, and this is what makes updates show up on a normal
+    # reload/reopen instead of needing a hard refresh.
     return FileResponse(
         STATIC_DIR / "index.html",
         headers={
@@ -1642,4 +1642,18 @@ def index():
     )
 
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+class RevalidatedStaticFiles(StaticFiles):
+    """Static assets (styles.css, js/*) must never go stale after a deploy.
+
+    no-cache = the browser may keep a copy but revalidates every request;
+    with Starlette's ETag/Last-Modified that's a cheap 304 on the Tailscale
+    LAN, and changed files show up on a normal reload — the same guarantee
+    the no-store index route gives the shell."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/static", RevalidatedStaticFiles(directory=STATIC_DIR), name="static")
