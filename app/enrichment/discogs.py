@@ -10,25 +10,26 @@ more granular than Last.fm for this specific use case.
 Authentication: Personal Access Token (no OAuth required for read-only).
 API docs: https://www.discogs.com/developers/
 
-Rate limits: 60 req/min for authenticated, 25 req/min unauthenticated.
-             We use the global rate limit from .env (default 1s).
+Rate limits: 60 req/min for authenticated, 25 req/min unauthenticated —
+             1.0s interval with a token, 2.5s without.
 """
 
 from __future__ import annotations
 
 import os
-import time
 from dataclasses import dataclass, field
 
 import requests
 from dotenv import load_dotenv
+
+from app.enrichment.ratelimit import RateLimiter, service_interval
 
 load_dotenv()
 
 _USER_TOKEN = os.getenv("DISCOGS_USER_TOKEN", "")
 _BASE_URL = "https://api.discogs.com"
 _USER_AGENT = f"{os.getenv('MUSICBRAINZ_APP_NAME', 'MusicIntelligenceSystem')}/0.1"
-_RATE_LIMIT = float(os.getenv("ENRICHMENT_RATE_LIMIT_SECONDS", "1.0"))
+_LIMITER = RateLimiter(service_interval(1.0 if _USER_TOKEN else 2.5))
 
 
 @dataclass
@@ -54,7 +55,7 @@ def enrich(
 
     Returns genre/style tags and label information.
     """
-    time.sleep(_RATE_LIMIT)
+    _LIMITER.wait()
 
     headers = {"User-Agent": _USER_AGENT}
     if _USER_TOKEN:

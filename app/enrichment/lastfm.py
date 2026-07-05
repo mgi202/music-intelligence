@@ -7,24 +7,25 @@ for a given track. Tags from Last.fm are stored as tag_type='public'.
 API docs: https://www.last.fm/api/show/track.getInfo
           https://www.last.fm/api/show/track.getTopTags
 
-Rate limits: 5 req/sec for free API keys. We apply a global rate limit
-             from .env (default 1s) which is conservative and safe.
+Rate limits: 5 req/sec for free API keys. We stay well under at 4 req/s
+             (0.25s minimum interval).
 """
 
 from __future__ import annotations
 
 import os
-import time
 from dataclasses import dataclass, field
 
 import requests
 from dotenv import load_dotenv
 
+from app.enrichment.ratelimit import RateLimiter, service_interval
+
 load_dotenv()
 
 _API_KEY = os.getenv("LASTFM_API_KEY", "")
 _BASE_URL = "https://ws.audioscrobbler.com/2.0/"
-_RATE_LIMIT = float(os.getenv("ENRICHMENT_RATE_LIMIT_SECONDS", "1.0"))
+_LIMITER = RateLimiter(service_interval(0.25))
 _MAX_TAGS = 10   # Maximum tags to store per track from Last.fm
 
 
@@ -52,7 +53,7 @@ def enrich(
     if not _API_KEY:
         return LastFmResult(matched=False)
 
-    time.sleep(_RATE_LIMIT)
+    _LIMITER.wait()
 
     tags = _fetch_top_tags(title, artist, mbid)
     info = _fetch_track_info(title, artist, mbid)

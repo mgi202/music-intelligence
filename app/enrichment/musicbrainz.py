@@ -6,7 +6,7 @@ Returns MBID, ISRC, canonical metadata, and release information.
 
 Rate limits: MusicBrainz allows 1 req/sec for anonymous clients, higher for
              identified clients. We use the musicbrainzngs library which handles
-             the User-Agent requirement. Respect the rate limit via sleep.
+             the User-Agent requirement.
 
 No API key required. A descriptive User-Agent is mandatory.
 """
@@ -14,17 +14,18 @@ No API key required. A descriptive User-Agent is mandatory.
 from __future__ import annotations
 
 import os
-import time
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
+
+from app.enrichment.ratelimit import RateLimiter, service_interval
 
 load_dotenv()
 
 _APP_NAME = os.getenv("MUSICBRAINZ_APP_NAME", "MusicIntelligenceSystem")
 _APP_VERSION = os.getenv("MUSICBRAINZ_APP_VERSION", "0.1.0")
 _CONTACT = os.getenv("MUSICBRAINZ_CONTACT_EMAIL", "")
-_RATE_LIMIT = float(os.getenv("ENRICHMENT_RATE_LIMIT_SECONDS", "1.0"))
+_LIMITER = RateLimiter(service_interval(1.0))
 
 
 def _init_mb():
@@ -68,7 +69,7 @@ def enrich(
     3. Return the best match above a similarity threshold.
     """
     mb = _init_mb()
-    time.sleep(_RATE_LIMIT)
+    _LIMITER.wait()
 
     # Strategy 1: ISRC lookup (most reliable)
     if isrc:
@@ -167,7 +168,7 @@ def lookup_release_date(recording_id: str) -> str | None:
     Used by the release-date backfill; raises on API failure so callers can
     count errors and keep going."""
     mb = _init_mb()
-    time.sleep(_RATE_LIMIT)
+    _LIMITER.wait()
     result = mb.get_recording_by_id(recording_id, includes=["releases"])
     return _earliest_release_date(result.get("recording", {}).get("release-list", []))
 

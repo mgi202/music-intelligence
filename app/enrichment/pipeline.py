@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
@@ -146,6 +147,12 @@ def run_pipeline(
 def _enrich_track(track: dict, db_path: str | None) -> str:
     """Run all enrichment sources for a single track and persist results.
 
+    MusicBrainz runs first and alone — its discovered ISRC/MBID feed the other
+    sources as lookup hints. The remaining four sources are independent
+    services and run concurrently; they only do network I/O and return their
+    results. All SQLite work happens on this (the calling) thread — SQLite
+    objects must not cross threads.
+
     Returns the track's new match_status."""
     pk = track["track_pk"]
     title = track["canonical_title"]
@@ -197,9 +204,25 @@ def _enrich_track(track: dict, db_path: str | None) -> str:
     except Exception as e:
         _log_event(pk, "musicbrainz", "error", str(e), db_path)
 
-    # ── 2. ListenBrainz ───────────────────────────────────────────────────────
+    # ── 2–5. ListenBrainz / Last.fm / Discogs / Bandcamp ─────────────────────
+    # Independent services — fan the network calls out concurrently, then
+    # process every result (all SQLite work) back on this thread after the
+    # join. The lambdas resolve module attributes at call time so test
+    # monkeypatching of <module>.enrich still applies.
+    bc_url = track.get("bandcamp_url")
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        lb_future = pool.submit(
+            lambda: listenbrainz.enrich(title, artist, recording_mbid=mb_recording_id))
+        lfm_future = pool.submit(
+            lambda: lastfm.enrich(title, artist, mbid=mb_recording_id))
+        dg_future = pool.submit(
+            lambda: discogs.enrich(title, artist, isrc=isrc))
+        bc_future = pool.submit(
+            lambda: bandcamp.enrich(title, artist, manual_url=bc_url)) if bc_url else None
+
+    # ── ListenBrainz results ──
     try:
-        lb_result = listenbrainz.enrich(title, artist, recording_mbid=mb_recording_id)
+        lb_result = lb_future.result()
         if lb_result.matched:
             enrichment_flags["has_listenbrainz_data"] = 1
             if lb_result.tags:
@@ -224,9 +247,9 @@ def _enrich_track(track: dict, db_path: str | None) -> str:
     except Exception as e:
         _log_event(pk, "listenbrainz", "error", str(e), db_path)
 
-    # ── 3. Last.fm ────────────────────────────────────────────────────────────
+    # ── Last.fm results ──
     try:
-        lfm_result = lastfm.enrich(title, artist, mbid=mb_recording_id)
+        lfm_result = lfm_future.result()
         if lfm_result.matched:
             enrichment_flags["has_lastfm_data"] = 1
             if lfm_result.tags:
@@ -245,9 +268,9 @@ def _enrich_track(track: dict, db_path: str | None) -> str:
     except Exception as e:
         _log_event(pk, "lastfm", "error", str(e), db_path)
 
-    # ── 4. Discogs ────────────────────────────────────────────────────────────
+    # ── Discogs results ──
     try:
-        dg_result = discogs.enrich(title, artist, isrc=isrc)
+        dg_result = dg_future.result()
         if dg_result.matched:
             enrichment_flags["has_discogs_data"] = 1
             # Capture the label + catalogue number (2026-07-03) — this data was
@@ -280,7 +303,7 @@ def _enrich_track(track: dict, db_path: str | None) -> str:
     except Exception as e:
         _log_event(pk, "discogs", "error", str(e), db_path)
 
-    # ── 5. Bandcamp (best-effort) ─────────────────────────────────────────────
+    # ── Bandcamp results (best-effort) ──
     # Bandcamp has no catalogue API and is not auto-searched here. When the
     # track has no stored URL we skip the network call entirely and just record
     # unavailability on the enrichment_state (flag only — NO per-track
@@ -288,10 +311,9 @@ def _enrich_track(track: dict, db_path: str | None) -> str:
     # tracks.bandcamp_url is set manually or by the nightly search sweep
     # (app.jobs.bandcamp_sweep), so a swept track keeps its Bandcamp tags
     # through every future re-enrichment.
-    bc_url = track.get("bandcamp_url")
     if bc_url:
         try:
-            bc_result = bandcamp.enrich(title, artist, manual_url=bc_url)
+            bc_result = bc_future.result()
             if bc_result.matched:
                 enrichment_flags["has_bandcamp_data"] = 1
                 enrichment_flags["bandcamp_checked_at"] = datetime.now(timezone.utc).isoformat()

@@ -15,17 +15,17 @@ No public Bandcamp catalogue API exists. This adapter does not pretend otherwise
 from __future__ import annotations
 
 import json
-import os
 import re
-import time
 from dataclasses import dataclass, field
 
 import requests
 from dotenv import load_dotenv
 
+from app.enrichment.ratelimit import RateLimiter, service_interval
+
 load_dotenv()
 
-_RATE_LIMIT = float(os.getenv("ENRICHMENT_RATE_LIMIT_SECONDS", "1.0"))
+_LIMITER = RateLimiter(service_interval(1.0))
 _USER_AGENT = "Mozilla/5.0 (compatible; MusicIntelligenceSystem/0.1)"
 
 
@@ -51,7 +51,7 @@ def enrich_by_url(url: str) -> BandcampResult:
     Parses the embedded JSON-LD `<script type="application/ld+json">` block
     and Bandcamp-specific tag metadata.
     """
-    time.sleep(_RATE_LIMIT)
+    _LIMITER.wait()
 
     try:
         resp = requests.get(

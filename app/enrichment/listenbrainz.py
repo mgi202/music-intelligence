@@ -15,17 +15,18 @@ API docs: https://listenbrainz.readthedocs.io/en/latest/users/api/
 from __future__ import annotations
 
 import os
-import time
 from dataclasses import dataclass, field
 
 import requests
 from dotenv import load_dotenv
 
+from app.enrichment.ratelimit import RateLimiter, service_interval
+
 load_dotenv()
 
 _TOKEN = os.getenv("LISTENBRAINZ_TOKEN", "")
 _BASE_URL = "https://api.listenbrainz.org/1"
-_RATE_LIMIT = float(os.getenv("ENRICHMENT_RATE_LIMIT_SECONDS", "1.0"))
+_LIMITER = RateLimiter(service_interval(1.0))
 
 
 @dataclass
@@ -48,7 +49,7 @@ def enrich(
     If recording_mbid is known (from MusicBrainz enrichment), use it directly
     to fetch tags. Otherwise, attempt metadata-based lookup via /metadata/lookup.
     """
-    time.sleep(_RATE_LIMIT)
+    _LIMITER.wait()
 
     headers = {}
     if _TOKEN:
