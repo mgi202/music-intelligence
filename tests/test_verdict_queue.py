@@ -254,6 +254,47 @@ def test_suggestion_ranking_and_evidence(db):
     assert "other Surgeon track" in ev            # artist prior line
 
 
+def test_queue_returns_more_than_three_suggestions(db):
+    # S1: the card shows the top 3 but the payload must carry ALL mapped
+    # suggestions (up to MAX_SUGGESTIONS) so the "+ n more" expander has data.
+    from app.tags.verdict_queue import build_queue
+    fams = ["deep house", "tech house", "tribal house", "minimal", "electro",
+            "nu-disco", "breakbeat", "dubstep"]  # 8 distinct subgenre profiles
+    with db_conn(db) as c:
+        insert_track(c, "t1", canonical_artist="V/A", normalized_artist="v/a",
+                     ytm_track_id="v1")
+        for tag in fams:
+            _pub(c, "t1", tag, "lastfm", 0.5)
+
+    sugg = build_queue(db_path=db)["tracks"][0]["suggestions"]
+    assert len(sugg) == 8            # >3, and all present (below the cap)
+    names = {s["tag_name"] for s in sugg}
+    assert names == set(fams)
+
+
+def test_queue_caps_suggestions_at_max(db):
+    # More mapped genres than MAX_SUGGESTIONS → capped server-side so a card can't
+    # sprawl, and the ranking keeps the strongest.
+    from app.tags.verdict_queue import build_queue, MAX_SUGGESTIONS
+    tags = ["deep house", "tech house", "tribal house", "garage house", "uk garage",
+            "minimal", "electro", "nu-disco", "breakbeat", "dubstep", "trance",
+            "leftfield", "downtempo", "trip hop"]  # 14 > MAX_SUGGESTIONS (12)
+    assert len(tags) > MAX_SUGGESTIONS
+    with db_conn(db) as c:
+        insert_track(c, "t1", canonical_artist="V/A", normalized_artist="v/a",
+                     ytm_track_id="v1")
+        for i, tag in enumerate(tags):
+            # Descending confidence so the strongest are deterministic.
+            _pub(c, "t1", tag, "lastfm", 0.9 - i * 0.05)
+
+    sugg = build_queue(db_path=db)["tracks"][0]["suggestions"]
+    assert len(sugg) == MAX_SUGGESTIONS
+    # Highest-confidence tag survived the cap; lowest was dropped.
+    names = [s["tag_name"] for s in sugg]
+    assert "deep house" in names
+    assert "trip hop" not in names
+
+
 # ── Reject → near_miss stickiness ──────────────────────────────────────────────
 
 def test_reject_creates_sticky_near_miss(db):

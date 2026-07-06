@@ -58,6 +58,11 @@ from app.tags.reference_manager import (
 # window keeps a request cheap. Returned in the queue meta so it's never silent.
 DEFAULT_SCAN_LIMIT = 1500
 
+# Max mapped suggestions returned per card. The FE shows the top 3 and hides the
+# rest behind a "+ n more" expander, so this is the sane server-side ceiling that
+# keeps a card with 20 mapped genres from sprawling — not the display cap.
+MAX_SUGGESTIONS = 12
+
 # The artist-diversity gate is usually the binding constraint, so weight the
 # "needs another artist" deficit heavily, and give a flat bonus to a track that
 # would bring a NOT-yet-represented artist to a profile still short on artists.
@@ -331,7 +336,7 @@ def build_queue(limit: int = 20, db_path: str | None = None,
                 })
 
             suggestions.sort(key=lambda s: s["score"], reverse=True)
-            suggestions = suggestions[:3]
+            suggestions = suggestions[:MAX_SUGGESTIONS]
 
             year = _release_year(c["release_date"])
             scored.append({

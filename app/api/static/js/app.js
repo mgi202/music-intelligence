@@ -18,6 +18,8 @@ const state = {
   // verdict log, readiness-bar flash targets. Session state resets on reload.
   vqPlFilter: localStorage.getItem("reviewPlaylist") || "",
   vqSession: [], vqBumped: [],
+  // Suggestions "+ n more" expander (S1) — collapsed per card, tracked by pk.
+  vqSuggExpanded: false, vqSuggCardPk: null,
   // Library facet: Dismissed ("Not for me") filter (R11)
   dismissed: false,
 };

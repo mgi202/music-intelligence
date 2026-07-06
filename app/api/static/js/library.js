@@ -332,27 +332,51 @@ const LAYER_ORDER = ["family", "subgenre", "functional", "personal", "era"];
 const LAYER_LABEL = { subgenre: "Subgenre", functional: "Function (set role)", personal: "Personal", family: "Family", era: "Era (sounds like)" };
 
 async function addTag(pk) {
+  const t = findTrack(pk);
+  return openTagModal(pk, t, {
+    onClose: () => {
+      refreshActiveView(); loadTagChips();
+      if (currentPlayingPk() === pk) updateHeroMeta(pk);
+    },
+  });
+}
+
+// Shared tag-modal core — Library's + tag and Review's + tag both call this so
+// the family-gated profile palette and free-text escape hatch stay in one place.
+// The profile vocabulary = your tap-palette. Recognition, not recall: tap a chip
+// to add/remove; no spelling drift, guaranteed to map to a profile.
+// `t` is the live track object (its `.tags` array is mutated in place). Hooks:
+//   opts.onChange(tag, added, profile|null) — after each successful apply/remove
+//   opts.onClose()                          — once on dismiss, only if changed
+async function openTagModal(pk, t, opts = {}) {
   if (!state.allTags.length) { try { state.allTags = await api("/api/tags"); } catch (e) {} }
-  // The profile vocabulary = your tap-palette. Recognition, not recall: tap a
-  // chip to add/remove. No spelling drift, guaranteed to map to a profile.
   if (!state.profileList) {
     try { state.profileList = (await api("/api/reference/profiles")).profiles || []; }
     catch (e) { state.profileList = []; }
   }
-  const t = findTrack(pk);
+  const profileByName = {};
+  state.profileList.forEach(p => { profileByName[p.tag_name.toLowerCase()] = p; });
   const manual = new Set((t.tags || [])
     .filter(g => g.tag_type === "private_manual").map(g => g.tag.toLowerCase()));
 
-  const opts = state.allTags.map(x => `<option value="${esc(x.tag)}">`).join("");
+  // Keep the live track's tag list in sync so the caller re-renders correctly
+  // and reopening the modal reflects reality, then fire the caller's hook.
+  let changed = false;
+  const notifyChange = (tag, added) => {
+    changed = true;
+    const key = tag.toLowerCase();
+    t.tags = (t.tags || []).filter(g =>
+      !(g.tag_type === "private_manual" && (g.tag || "").toLowerCase() === key));
+    if (added) t.tags.push({ tag: key, tag_type: "private_manual" });
+    if (opts.onChange) opts.onChange(tag, added, profileByName[key] || null);
+  };
+
+  const dlOpts = state.allTags.map(x => `<option value="${esc(x.tag)}">`).join("");
   const bg = document.createElement("div");
   bg.className = "modal-bg";
-  let changed = false;
   const close = () => {
     bg.remove();
-    if (changed) {
-      refreshActiveView(); loadTagChips();
-      if (currentPlayingPk() === pk) updateHeroMeta(pk);
-    }
+    if (changed && opts.onClose) opts.onClose();
   };
   bg.onclick = (ev) => { if (ev.target === bg) close(); };
 
@@ -361,7 +385,7 @@ async function addTag(pk) {
     <div id="palette"></div>
     <div class="hint" style="margin-top:10px">Or type a free-text tag (descriptive only — won't teach a profile):</div>
     <input id="tag-input" list="tag-suggest" placeholder="e.g. raw, hardware-jam" autocomplete="off" autocapitalize="none">
-    <datalist id="tag-suggest">${opts}</datalist>
+    <datalist id="tag-suggest">${dlOpts}</datalist>
     <div class="btnrow">
       <button class="primary" id="tag-done">Done</button>
     </div>
@@ -420,12 +444,12 @@ async function addTag(pk) {
     try {
       if (manual.has(key)) {
         await api(`/api/tracks/${pk}/tags/${encodeURIComponent(tag)}`, { method: "DELETE" });
-        manual.delete(key); toast(`Removed: ${key}`);
+        manual.delete(key); notifyChange(tag, false); toast(`Removed: ${key}`);
       } else {
         await api(`/api/tracks/${pk}/tags`, { method: "POST", body: JSON.stringify({ tag }) });
-        manual.add(key); toast(`Tagged: ${key}`);
+        manual.add(key); notifyChange(tag, true); toast(`Tagged: ${key}`);
       }
-      changed = true; renderPalette();
+      renderPalette();
     } catch (e) { toast("Failed — try again"); btn.disabled = false; }
   };
 
@@ -434,7 +458,7 @@ async function addTag(pk) {
   const submitFree = async () => {
     const tag = input.value.trim(); if (!tag) return;
     await api(`/api/tracks/${pk}/tags`, { method: "POST", body: JSON.stringify({ tag }) });
-    manual.add(tag.toLowerCase()); changed = true; input.value = "";
+    manual.add(tag.toLowerCase()); notifyChange(tag, true); input.value = "";
     renderPalette(); toast(`Tagged: ${tag.toLowerCase()}`);
   };
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") submitFree(); });

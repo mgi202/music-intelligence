@@ -134,8 +134,10 @@ function renderVerdict() {
   // Era arrives PREFILLED from the release decade (CARD-WEIGHT RULE:
   // confirm-or-correct, never choose-from-five). Committing the card confirms
   // it; clearing the chip = no era claim.
-  if (!t._sel) t._sel = { func: null, personal: new Set(), era: t.era_prefill || null, accepted: new Set(), rejected: new Set() };
+  if (!t._sel) t._sel = { func: null, personal: new Set(), era: t.era_prefill || null, accepted: new Set(), rejected: new Set(), added: new Set() };
   state.vqRevealed = false;
+  // Suggestions "+ n more" expander collapses again on each new card (S1).
+  if (state.vqSuggCardPk !== t.pk) { state.vqSuggExpanded = false; state.vqSuggCardPk = t.pk; }
 
   const existing = (t.tags || []).map(g =>
     `<span class="tag ${g.tag_type === "private_manual" ? "manual" : ""}">${esc(g.tag)}</span>`).join("");
@@ -145,30 +147,49 @@ function renderVerdict() {
        <button class="plx" title="remove from this playlist on YTM" onclick="vqRemovePl('${t.pk}','${esc(p.playlist_id)}')">×</button></span>`).join("");
 
   // Suggestions — the section collapses entirely when empty (R1); it returns
-  // by itself as enrichment data arrives.
+  // by itself as enrichment data arrives. The backend returns ALL mapped
+  // suggestions (capped ≤12); the card shows the top 3 with hotkeys and hides
+  // the rest behind a "+ n more" expander (S1). Only the top 3 carry 1/2/3 —
+  // expanded rows are click-only so the key map never shifts.
   const sugg = (t.suggestions || []);
+  const suggCard = (s, i, hotkey) => {
+    const acc = t._sel.accepted.has(s.profile_id);
+    const rej = t._sel.rejected.has(s.profile_id);
+    const ev = (s.evidence || []).map(e => `<span>${esc(e)}</span>`).join("");
+    return `<div class="vq-scard ${acc ? "accepted" : ""} ${rej ? "rejected" : ""}">
+      <div class="vq-srow">
+        <span class="vq-skey">${hotkey ? i + 1 : "·"}</span>
+        <span class="vq-sname">${esc(s.tag_name)}</span>
+        <span class="vq-slayer">${esc(s.taxonomy_layer)}</span>
+        <button class="vq-sbtn yes ${acc ? "on" : ""}" onclick="vqAccept(${i})">✓ yes</button>
+        <button class="vq-sbtn no ${rej ? "on" : ""}" onclick="vqReject(${i})">✕ no</button>
+      </div>
+      ${ev ? `<div class="vq-ev">${ev}</div>` : ""}`
+      + `</div>`;
+  };
   let suggBlock = "";
   if (sugg.length) {
-    const suggHtml = sugg.map((s, i) => {
-      const acc = t._sel.accepted.has(s.profile_id);
-      const rej = t._sel.rejected.has(s.profile_id);
-      const ev = (s.evidence || []).map(e => `<span>${esc(e)}</span>`).join("");
-      return `<div class="vq-scard ${acc ? "accepted" : ""} ${rej ? "rejected" : ""}">
-        <div class="vq-srow">
-          <span class="vq-skey">${i + 1}</span>
-          <span class="vq-sname">${esc(s.tag_name)}</span>
-          <span class="vq-slayer">${esc(s.taxonomy_layer)}</span>
-          <button class="vq-sbtn yes ${acc ? "on" : ""}" onclick="vqAccept(${i})">✓ yes</button>
-          <button class="vq-sbtn no ${rej ? "on" : ""}" onclick="vqReject(${i})">✕ no</button>
-        </div>
-        ${ev ? `<div class="vq-ev">${ev}</div>` : ""}
-      </div>`;
-    }).join("");
+    const top = sugg.slice(0, 3).map((s, i) => suggCard(s, i, true)).join("");
+    const restCount = sugg.length - 3;
+    let expander = "";
+    if (restCount > 0) {
+      const rest = sugg.slice(3).map((s, i) => suggCard(s, i + 3, false)).join("");
+      // Collapsed by default; state.vqSuggExpanded is reset per card (see below).
+      expander = state.vqSuggExpanded
+        ? `<div class="vq-sugg-rest">${rest}</div>
+           <div class="vq-morelink" onclick="vqToggleSugg()">− show fewer</div>`
+        : `<div class="vq-morelink" onclick="vqToggleSugg()">+ ${restCount} more</div>`;
+    }
     const blur = state.vqGuessFirst ? "blurred" : "";
     const revealBtn = state.vqGuessFirst
       ? '<div class="vq-reveal" onclick="vqReveal()">👂 Guess first — tap or press <b>b</b> to reveal suggestions</div>' : "";
-    suggBlock = `<div class="vq-seclbl">Suggestions <span class="vq-skiphint">1/2/3 = yes · ⇧1/2/3 = no</span></div>
-      ${revealBtn}<div class="vq-sugg ${blur}">${suggHtml}</div>`;
+    suggBlock = `<div class="vq-seclbl">Suggestions <span class="vq-skiphint">1/2/3 = yes · ⇧1/2/3 = no</span>
+      <button class="vq-addtag" onclick="vqAddTag()" title="add any vocab or free-text tag — vocab matches teach a profile">+ tag</button></div>
+      ${revealBtn}<div class="vq-sugg ${blur}">${top}${expander}</div>`;
+  } else {
+    // No mapped suggestions yet — still let the user reach the full vocab.
+    suggBlock = `<div class="vq-seclbl">Suggestions <span class="vq-skiphint">none mapped yet</span>
+      <button class="vq-addtag" onclick="vqAddTag()" title="add any vocab or free-text tag — vocab matches teach a profile">+ tag</button></div>`;
   }
 
   const funcChips = vqProfilesByLayer("functional").map((p, i) =>
@@ -383,6 +404,40 @@ function vqPlay() {
   play(t.video_id, `${t.artist} — ${t.title}`, t.pk, !!t.playback_video_id);
 }
 
+function vqToggleSugg() {
+  state.vqSuggExpanded = !state.vqSuggExpanded;
+  renderVerdict();
+}
+
+// + tag on the Review card (S2): the same family-gated palette + free-text flow
+// as Library, wired to the queue's bookkeeping. A vocab match is a positive
+// verdict for that profile (via the tags endpoint / reference derivation), so we
+// refresh readiness and fire the +1 flash; every applied tag is tracked in
+// _sel.added so it joins this card's commit log and its undo.
+async function vqAddTag() {
+  const t = vqCard(); if (!t) return;
+  const bumped = [];
+  await openTagModal(t.pk, t, {
+    onChange: (tag, added, prof) => {
+      const key = tag.toLowerCase();
+      if (added) {
+        t._sel.added.add(tag);
+        if (prof) bumped.push(prof.profile_id);
+      } else {
+        for (const x of [...t._sel.added]) if (x.toLowerCase() === key) t._sel.added.delete(x);
+      }
+    },
+    onClose: async () => {
+      try { const r = await api("/api/reference/readiness"); state.vqReadiness = r.profiles || []; } catch (e) {}
+      if (bumped.length) {
+        state.vqBumped = bumped.slice();
+        setTimeout(() => { state.vqBumped = []; if (state.view === "review") renderVerdict(); }, 2500);
+      }
+      renderVerdict();
+    },
+  });
+}
+
 async function vqAccept(i) {
   const t = vqCard(); const s = (t.suggestions || [])[i]; if (!s) return;
   try {
@@ -422,7 +477,7 @@ function vqPickEra(tag) {
 // Anything counts as input — a rating alone is a valid commit (R7).
 function vqInputMade(t) {
   return !!(t._sel.func || t._sel.personal.size || t._sel.accepted.size
-            || t._sel.rejected.size || t._ratedThisCard || t._eraTouched);
+            || t._sel.rejected.size || t._sel.added.size || t._ratedThisCard || t._eraTouched);
 }
 
 async function vqCommit() {
@@ -435,6 +490,10 @@ async function vqCommit() {
   if (t._sel.func) tags.push(t._sel.func);
   t._sel.personal.forEach(x => tags.push(x));
   if (t._sel.era) tags.push(t._sel.era);   // prefill-or-corrected — commit confirms it
+  // Tags added via the card's "+ tag" (S2) — already applied, but re-posting is
+  // idempotent and this folds them into the commit's log + undo. Dedupe so a tag
+  // that was both chip-picked and +tag-added isn't double-listed.
+  t._sel.added.forEach(x => { if (!tags.some(y => y.toLowerCase() === x.toLowerCase())) tags.push(x); });
   try {
     for (const tag of tags) {
       await api(`/api/tracks/${t.pk}/tags`, { method: "POST", body: JSON.stringify({ tag }) });
