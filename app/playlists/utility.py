@@ -236,16 +236,18 @@ def seed_example_rules(
 # ─────────────────────────────────────────────────────────────────────────────
 # Locked tag vocabulary (TAG-VOCAB-DESIGN.md).
 #
-# Functional (8) + personal (7) LOCKED 2026-07-02; family (11) + subgenre (24)
-# + era (5) LOCKED 2026-07-03; subgenre pop rap ADDED 2026-07-05 (Matthias-
-# approved one-off) — 56 locked profiles. The hard cap was RETIRED 2026-07-04:
-# subgenre additions now arrive dynamically via the vocabulary-suggestions
-# queue (app/tags/vocab_expansion.py, per-family tier quotas) and — since
-# 2026-07-05 — the FE vocab manager (personal + subgenre layers,
-# app/tags/vocab_manager.py) as user-owned DB rows. Renames + deletions of the
-# LOCKED rows below stay code-locked HERE (label-preserving migration path),
-# except FE renames recorded in tag_profile_renames (tombstones reconcile
-# honours).
+# Functional (8) + personal (7) LOCKED 2026-07-02; family + subgenre + era (5)
+# LOCKED 2026-07-03; subgenre pop rap ADDED 2026-07-05. 2026-07-06: the "bass"
+# umbrella family dissolved and jungle/drum and bass/dubstep/uk garage/breakbeat
+# promoted subgenre→family; a Latin family + 9 subgenres added from a library
+# scan — now family (16) + subgenre (30), 66 seeded profiles. The hard cap was
+# RETIRED 2026-07-04: subgenre additions now arrive dynamically via the
+# vocabulary-suggestions queue (app/tags/vocab_expansion.py, per-family tier
+# quotas) and — since 2026-07-05 — the FE vocab manager (personal + subgenre +
+# era layers since 2026-07-06, app/tags/vocab_manager.py) as user-owned DB rows.
+# Renames + deletions of the LOCKED rows below stay code-locked HERE
+# (label-preserving migration path), except FE renames recorded in
+# tag_profile_renames (tombstones reconcile honours).
 #
 # descriptions are copied verbatim from TAG-VOCAB-DESIGN.md (or written in its
 # voice for family/subgenre/era) so the FE renders each chip's definition as a
@@ -262,7 +264,7 @@ def seed_example_rules(
 # the Review card's prefill but must never surface as suggestion chips.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# functional (8) + personal (7) + family (11) + subgenre (25) + era (5).
+# functional (8) + personal (7) + family (16) + subgenre (30) + era (5) = 66.
 LOCKED_TAG_PROFILES: list[dict] = [
     # ── Functional — a track's job in a set arc ──
     {"profile_id": "warm-up", "sort_order": 0, "tag_name": "warm-up", "taxonomy_layer": "functional",
@@ -533,8 +535,8 @@ FUNCTIONAL_TIEBREAKERS: list[dict] = [
 # was seeded before the vocab lock. Profiles absent here and not in the locked
 # set (e.g. melodic-late-night, and — since the 2026-07-03 subgenre lock — the
 # interim warehouse-industrial / hypnotic-rolling seeds, which match nothing in
-# the locked 24) are dropped by reconcile IF label-free, kept + reported in
-# `kept_with_labels` otherwise.
+# the seeded subgenre set) are dropped by reconcile IF label-free, kept +
+# reported in `kept_with_labels` otherwise.
 PROFILE_RENAME_MAP: dict[str, str] = {
     "warm-up-groove": "warm-up",
     "peak-time-dark-techno": "peak-time",
