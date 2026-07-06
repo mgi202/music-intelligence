@@ -128,6 +128,23 @@ def _era_prefill(year: int | None, raw_tags: list[dict]) -> str | None:
     return None
 
 
+def _resolve_era_prefill(
+    name: str | None,
+    active: set[str],
+    renames: dict[str, str],
+) -> str | None:
+    """Keep the decade prefill valid after the era layer went self-service
+    (2026-07-06). _era_prefill returns a canonical slot name (70s-sound…modern);
+    if Matthias renamed that slot in the FE vocab manager, follow the rename
+    tombstone chain to its current name, and drop it entirely if the slot was
+    retired or deleted — so the Review card only ever preselects a live chip."""
+    seen: set[str] = set()
+    while name is not None and name in renames and name not in seen:
+        seen.add(name)
+        name = renames[name]
+    return name if name in active else None
+
+
 # Eligibility shared by both lenses. The functional/personal private_manual
 # exclusion means "the micro-questions are already answered for this track".
 # "Later" is a deferral, not a black hole (R6): a skip auto-returns after 14
@@ -298,6 +315,21 @@ def build_queue(limit: int = 20, db_path: str | None = None,
             for r in conn.execute("SELECT profile_id, tag_name FROM tag_profiles").fetchall()
         }
 
+        # Era went self-service (2026-07-06). The decade prefill names a
+        # canonical slot; follow any FE rename and drop retired/deleted slots so
+        # the card only ever preselects a live era chip (see _resolve_era_prefill).
+        era_active = {
+            r["tag_name"] for r in conn.execute(
+                "SELECT tag_name FROM tag_profiles "
+                "WHERE taxonomy_layer = 'era' AND retired_at IS NULL"
+            ).fetchall()
+        }
+        era_renames = {
+            r["old_profile_id"]: r["new_profile_id"] for r in conn.execute(
+                "SELECT old_profile_id, new_profile_id FROM tag_profile_renames"
+            ).fetchall()
+        }
+
         # ── Score + build suggestions per track ──
         scored: list[dict] = []
         for c in candidates:
@@ -348,7 +380,8 @@ def build_queue(limit: int = 20, db_path: str | None = None,
                 "playback_video_id": c["playback_video_id"],
                 "duration_ms": c["duration_ms"],
                 "release_year": year,
-                "era_prefill": _era_prefill(year, public_tags[pk]),
+                "era_prefill": _resolve_era_prefill(
+                    _era_prefill(year, public_tags[pk]), era_active, era_renames),
                 "personal_rating": c["personal_rating"],
                 "blocked_from_playlists": c["blocked_from_playlists"],
                 "do_not_recommend": c["do_not_recommend"],

@@ -344,3 +344,67 @@ def test_api_reference_profiles_serves_era_layer(client, db):
         "70s-sound", "80s-sound", "90s-sound", "00s-sound", "modern"
     ]
     assert all(p["description"] for p in eras)   # tooltips render from these
+
+
+# ── Era is self-service (2026-07-06) — same controls as personal/subgenre ────
+
+def test_era_is_manageable_add_rename_retire(db):
+    """Era joined the FE-manageable layers: a user era can be created, appears
+    in Review immediately, and rename/retire go through the same machinery."""
+    from app.tags import vocab_manager
+    from app.tags.verdict_queue import build_queue
+
+    vocab_manager.create_profile(
+        "y2k", "era", "Turn-of-the-millennium sheen — trance leads, garage swing",
+        db_path=db)
+    with db_conn(db) as c:
+        insert_track(c, "t1", canonical_artist="A", ytm_track_id="v1")
+    # New era is a live, selectable chip in Review immediately.
+    build_queue(db_path=db)
+    assert "y2k" in _active_era_profile_names(db)
+
+    r = vocab_manager.rename_profile("y2k", "y2k sheen", db_path=db)
+    assert r["renamed"] is True
+    assert "y2k sheen" in _era_profile_names(db)
+
+    vocab_manager.retire_profile("y2k sheen", db_path=db)
+    assert "y2k sheen" not in _active_era_profile_names(db)
+
+
+def _era_profile_names(db):
+    with db_conn(db) as c:
+        return {r["tag_name"] for r in c.execute(
+            "SELECT tag_name FROM tag_profiles WHERE taxonomy_layer = 'era'")}
+
+
+def _active_era_profile_names(db):
+    with db_conn(db) as c:
+        return {r["tag_name"] for r in c.execute(
+            "SELECT tag_name FROM tag_profiles "
+            "WHERE taxonomy_layer = 'era' AND retired_at IS NULL")}
+
+
+def test_era_prefill_follows_a_renamed_decade_slot(db):
+    """Renaming a canonical decade slot in the FE must not break the card's
+    confirm-or-correct prefill — it follows the rename tombstone."""
+    from app.tags import vocab_manager
+    from app.tags.verdict_queue import build_queue
+    vocab_manager.rename_profile("modern", "current-sound", db_path=db)
+    with db_conn(db) as c:
+        insert_track(c, "t1", canonical_artist="A", ytm_track_id="v1",
+                     release_date="2015-01-01")
+    t = build_queue(db_path=db)["tracks"][0]
+    assert t["era_prefill"] == "current-sound"
+
+
+def test_era_prefill_dropped_when_decade_slot_retired(db):
+    """A retired decade slot is no longer a live chip, so the card must not
+    preselect it — prefill returns None rather than a dead name."""
+    from app.tags import vocab_manager
+    from app.tags.verdict_queue import build_queue
+    vocab_manager.retire_profile("modern", db_path=db)
+    with db_conn(db) as c:
+        insert_track(c, "t1", canonical_artist="A", ytm_track_id="v1",
+                     release_date="2015-01-01")
+    t = build_queue(db_path=db)["tracks"][0]
+    assert t["era_prefill"] is None

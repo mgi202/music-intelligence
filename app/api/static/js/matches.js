@@ -92,11 +92,12 @@ function suggRowsHtml(rows) {
 // Display order for the vocabulary section (differs from the tap-palette's
 // LAYER_ORDER: browsing reads set-arc → moments → genres).
 const VOCAB_LAYER_ORDER = ["functional", "personal", "family", "subgenre", "era"];
-// Self-service layers (2026-07-05): personal is Matthias's own (place-anchored
-// contexts like egg-floor-2), subgenres grow with the library. Functional +
-// era stay code-locked — set order, hotkeys and the era prefill depend on
-// their exact membership.
-const VOCAB_MANAGED_LAYERS = ["personal", "subgenre"];
+// Self-service layers: personal is Matthias's own (place-anchored contexts like
+// egg-floor-2), subgenres grow with the library, and era (production vibe) went
+// self-service on 2026-07-06 — the Review decade prefill follows renames so the
+// five canonical slots stay safe. Only functional stays code-locked (its set
+// order and hotkeys depend on exact membership).
+const VOCAB_MANAGED_LAYERS = ["personal", "subgenre", "era"];
 
 function vocabProfilesHtml(profiles) {
   return VOCAB_LAYER_ORDER.map(layer => {
@@ -143,11 +144,17 @@ function vpAdd(layer) {
   const bg = document.createElement("div");
   bg.className = "modal-bg";
   bg.onclick = (ev) => { if (ev.target === bg) bg.remove(); };
+  const nameHint = { personal: " (kebab-case, e.g. egg-floor-2, beach)",
+                     era: " (e.g. 90s-sound, y2k, futuristic)",
+                     subgenre: " (e.g. hip house)" }[layer] || "";
+  const descPlaceholder = { personal: "Where would I most likely hear this?",
+                            era: "What production era does it sound like?" }[layer]
+                          || "What does it sound like?";
   bg.innerHTML = `<div class="modal"><h2>New ${layer} profile</h2>
-    <label>Name${layer === "personal" ? " (kebab-case, e.g. egg-floor-2, beach)" : " (e.g. hip house)"}</label>
+    <label>Name${nameHint}</label>
     <input id="vp-name" autocomplete="off" autocapitalize="none">
     <label>Description (required — becomes the chip's hover tooltip in Review)</label>
-    <input id="vp-desc" autocomplete="off" placeholder="${layer === "personal" ? "Where would I most likely hear this?" : "What does it sound like?"}">
+    <input id="vp-desc" autocomplete="off" placeholder="${descPlaceholder}">
     <label>Extra matching terms (optional, comma-separated — widens which public tags map to it)</label>
     <input id="vp-terms" autocomplete="off" autocapitalize="none">
     ${famRow}
@@ -219,7 +226,7 @@ async function loadTags() {
       : '<div class="vsec">Suggested subgenres</div><div class="stats" id="sugglist-empty">None pending. New candidates appear as your library and tagging grow.</div>'}
      <button class="scanbtn" onclick="rescanVocab(this)">⟳ Scan library for candidates now</button>
      <div class="vsec">Vocabulary</div>
-     <div class="stats">The tagging vocabulary, grouped by layer. Personal and subgenre are yours to manage — add, rename, retire. Functional and era stay code-locked (hotkeys and set order depend on them).</div>
+     <div class="stats">The tagging vocabulary, grouped by layer. Personal, subgenre and era are yours to manage — add, rename, retire. Functional stays code-locked (hotkeys and set order depend on it).</div>
      ${vocabProfilesHtml(profiles)}
      <div class="vsec">All raw tags</div>
      <div class="stats">${state.vocab.length} distinct tags · "Hide" removes a tag everywhere; "Alias" merges a spelling variant into another tag.</div>

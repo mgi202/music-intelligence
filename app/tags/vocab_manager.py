@@ -1,9 +1,10 @@
 """
-FE vocabulary manager — self-service personal + subgenre profiles (2026-07-05).
+FE vocabulary manager — self-service personal + subgenre + era profiles.
 
 The personal layer is Matthias's own (place-anchored listening contexts like
-egg-floor-2 or beach belong to him, not to a code deploy), and subgenres grow
-with the library. This module makes both layers manageable from the Tags tab:
+egg-floor-2 or beach belong to him, not to a code deploy), subgenres grow with
+the library, and era (production vibe — "sounds like") is his to shape too
+(2026-07-06). This module makes those layers manageable from the Tags tab:
 
   create_profile   — new profile, starts untrained (0/15/15/3). Rows are
                      stamped user_defined=1 (+ origin='user_approved') so
@@ -21,8 +22,11 @@ with the library. This module makes both layers manageable from the Tags tab:
   delete_profile   — HARD, only when the profile has zero reference labels
                      and zero manual tags; otherwise refuse (retire instead).
 
-Functional and era stay code-locked: set order, hotkeys and the era prefill
-logic depend on their exact membership (locked scope decision, 2026-07-05).
+Functional stays code-locked: set order and hotkeys depend on its exact
+membership (locked scope decision, 2026-07-05). Era became self-service on
+2026-07-06 — the Review card's decade prefill follows FE renames/retires of the
+five canonical decade slots (see verdict_queue._resolve_era_prefill), so it
+stays intact even when Matthias reshapes the layer.
 
 Error contract (mapped by the API layer):
   ValueError  → bad input / unknown profile (400/404 by message)
@@ -37,7 +41,7 @@ from datetime import datetime, timezone
 
 from app.db.connection import db_conn
 
-MANAGEABLE_LAYERS = ("personal", "subgenre")
+MANAGEABLE_LAYERS = ("personal", "subgenre", "era")
 
 # Post-normalisation shape: the charset the locked vocabulary already uses
 # (r&b-soul, drum and bass, 00s-sound, hip-house…).
@@ -69,7 +73,7 @@ def _require_manageable(row, profile_id: str) -> None:
     if row["taxonomy_layer"] not in MANAGEABLE_LAYERS:
         raise ValueError(
             f"The {row['taxonomy_layer']} layer is code-locked — only "
-            f"personal and subgenre profiles are manageable from the FE"
+            f"personal, subgenre and era profiles are manageable from the FE"
         )
 
 
@@ -81,11 +85,13 @@ def create_profile(
     parent_family: str | None = None,
     db_path: str | None = None,
 ) -> dict:
-    """Create a user-defined personal or subgenre profile.
+    """Create a user-defined personal, subgenre or era profile.
 
     The description is mandatory — it becomes the chip's hover tooltip in
     Review. New profiles start untrained (0/15/15/3); sort_order appends at
-    the end of the layer so existing hotkey positions never shift.
+    the end of the layer so existing hotkey positions never shift. New era
+    profiles are NOT auto-prefilled from release decade (only the five
+    canonical decade slots are) — they're selected by ear like any other chip.
     """
     if layer not in MANAGEABLE_LAYERS:
         raise ValueError(

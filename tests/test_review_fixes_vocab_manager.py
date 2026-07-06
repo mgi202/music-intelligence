@@ -177,10 +177,17 @@ def test_create_requires_description_and_unique_name(client, db):
         "name": "gym", "layer": "personal", "description": "clash with locked",
     })
     assert r.status_code == 409
+    # functional stays code-locked — creating into it is rejected.
     r = client.post("/api/vocabulary/profiles", json={
-        "name": "hyperpop", "layer": "era", "description": "wrong layer",
+        "name": "hyperpop", "layer": "functional", "description": "wrong layer",
     })
     assert r.status_code == 400
+    # era went self-service (2026-07-06) — creating into it now succeeds.
+    r = client.post("/api/vocabulary/profiles", json={
+        "name": "y2k", "layer": "era", "description": "Millennial trance sheen",
+    })
+    assert r.status_code == 200
+    assert r.json()["taxonomy_layer"] == "era"
 
 
 def test_user_defined_profile_survives_reconcile(client, db):

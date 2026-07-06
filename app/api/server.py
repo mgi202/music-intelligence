@@ -60,7 +60,7 @@ class VocabRequest(BaseModel):
 
 
 class ProfileCreateRequest(BaseModel):
-    # FE vocab manager (2026-07-05): personal + subgenre layers only.
+    # FE vocab manager: personal + subgenre + era layers (era added 2026-07-06).
     name: str
     layer: str
     description: str
@@ -750,8 +750,8 @@ def reject_vocab_suggestion(suggestion_id: int):
 
 
 # ─────────────────────────────────────────
-# FE vocabulary manager (2026-07-05) — personal + subgenre profiles are
-# self-service; functional and era stay code-locked.
+# FE vocabulary manager — personal + subgenre + era profiles are self-service
+# (era added 2026-07-06); functional stays code-locked.
 # ─────────────────────────────────────────
 
 def _vocab_manager_errors(fn, *args, **kwargs):
@@ -766,7 +766,7 @@ def _vocab_manager_errors(fn, *args, **kwargs):
 
 @app.post("/api/vocabulary/profiles")
 def create_vocab_profile(body: ProfileCreateRequest):
-    """Add a personal/subgenre profile. Starts untrained (0/15/15/3) — it
+    """Add a personal/subgenre/era profile. Starts untrained (0/15/15/3) — it
     needs ~30 judgements before auto-tagging can use it. user_defined rows
     survive every init_db/reconcile."""
     from app.tags import vocab_manager
