@@ -70,8 +70,8 @@ function vocabRowsHtml(rows) {
       <div class="vname">${esc(v.tag)} <span class="vn">${v.n}</span>${v.alias_to ? ` <span class="alias">→ ${esc(v.alias_to)}</span>` : ""}</div>
       ${v.layer ? `<span class="vlayer" title="this tag is a vocabulary profile">${esc(v.layer)}</span>` : ""}
       ${v.manual ? '<span class="vlayer manual" title="applied by hand on ≥1 track">manual</span>' : ""}
-      <button class="vbtn ${v.hidden ? "on" : ""}" onclick="toggleHide('${esc(v.tag)}', ${v.hidden ? 0 : 1})">${v.hidden ? "Hidden" : "Hide"}</button>
-      <button class="vbtn" onclick="aliasTag('${esc(v.tag)}')">${v.alias_to ? "Re-alias" : "Alias"}</button>
+      <button class="vbtn ${v.hidden ? "on" : ""}" onclick="toggleHide('${jsarg(v.tag)}', ${v.hidden ? 0 : 1})">${v.hidden ? "Hidden" : "Hide"}</button>
+      <button class="vbtn" onclick="aliasTag('${jsarg(v.tag)}')">${v.alias_to ? "Re-alias" : "Alias"}</button>
     </div>`).join("") : '<div class="empty">No tags match.</div>';
 }
 
@@ -119,11 +119,11 @@ function vpChipHtml(p, managed) {
     return `<span class="vp ${user ? "userok" : ""}" title="${esc(title)}">${esc(p.tag_name)} <span class="vpn">${p.n}</span></span>`;
   }
   const acts = p.retired_at
-    ? `<a class="vpact" title="bring it back — returns to Review immediately" onclick="vpRestore('${esc(p.profile_id)}')">restore</a>`
-    : `<a class="vpact" title="rename — labels and manual tags migrate, nothing is lost" onclick="vpRename('${esc(p.profile_id)}')">✎</a>
-       <a class="vpact" title="retire — hides it from Review questions and readiness; existing tags and labels stay" onclick="vpRetire('${esc(p.profile_id)}')">retire</a>`;
+    ? `<a class="vpact" title="bring it back — returns to Review immediately" onclick="vpRestore('${jsarg(p.profile_id)}')">restore</a>`
+    : `<a class="vpact" title="rename — labels and manual tags migrate, nothing is lost" onclick="vpRename('${jsarg(p.profile_id)}')">✎</a>
+       <a class="vpact" title="retire — hides it from Review questions and readiness; existing tags and labels stay" onclick="vpRetire('${jsarg(p.profile_id)}')">retire</a>`;
   const del = (p.n_labels === 0)
-    ? `<a class="vpact del" title="delete — only possible while it has no labels and no manual tags" onclick="vpDelete('${esc(p.profile_id)}')">×</a>` : "";
+    ? `<a class="vpact del" title="delete — only possible while it has no labels and no manual tags" onclick="vpDelete('${jsarg(p.profile_id)}')">×</a>` : "";
   return `<span class="vp ${user ? "userok" : ""} ${p.retired_at ? "retired" : ""}" title="${esc(title)}">
     ${esc(p.tag_name)} <span class="vpn">${p.n}</span>${acts}${del}</span>`;
 }
@@ -135,8 +135,14 @@ function vpInvalidateProfiles() {
   state.profileList = null;     // + tag palette (library modal)
 }
 
-function vpAdd(layer) {
-  const fams = (state.vocabProfiles || []).filter(p => p.taxonomy_layer === "family");
+// opts.onCreated(profile_id) lets callers outside the Tags tab (e.g. the tag
+// palette's "+ new") refresh themselves. When omitted we assume we're on the
+// Tags tab and rebuild it. The subgenre family list falls back to the profile
+// list the palette already fetched, so it works even before loadTags has run.
+function vpAdd(layer, opts = {}) {
+  const famSource = (state.vocabProfiles && state.vocabProfiles.length)
+    ? state.vocabProfiles : (state.profileList || []);
+  const fams = famSource.filter(p => p.taxonomy_layer === "family");
   const famRow = layer === "subgenre"
     ? `<label>Family (gates the tag palette)</label>
        <select id="vp-fam"><option value="">— none —</option>${fams.map(f =>
@@ -175,7 +181,10 @@ function vpAdd(layer) {
       const r = await api("/api/vocabulary/profiles", { method: "POST", body: JSON.stringify(body) });
       bg.remove();
       toast(`Added “${r.profile_id}” — needs ~30 judgements before auto-tagging can use it`);
-      vpInvalidateProfiles(); await loadTags(); loadTagChips();
+      vpInvalidateProfiles();
+      if (state.view === "tags") await loadTags();
+      loadTagChips();
+      if (opts.onCreated) await opts.onCreated(r.profile_id);
     } catch (e) { toast(e.message || "Couldn't add"); }
   };
 }

@@ -399,9 +399,16 @@ async function openTagModal(pk, t, opts = {}) {
   // yet → subgenres hide behind a pick-a-family hint. "show all styles" is the
   // escape hatch for genuine cross-family hybrids (hip house etc.).
   const palette = bg.querySelector("#palette");
-  const byLayer = {};
-  state.profileList.forEach(p => { (byLayer[p.taxonomy_layer] ||= []).push(p); });
-  const familyNames = new Set((byLayer.family || []).map(p => p.tag_name.toLowerCase()));
+  // Layers you can grow from here without a trip to the Tags tab (2026-07-06).
+  const MANAGED_LAYERS = ["personal", "subgenre", "era"];
+  let byLayer = {};
+  let familyNames = new Set();
+  const rebuildByLayer = () => {
+    byLayer = {};
+    state.profileList.forEach(p => { (byLayer[p.taxonomy_layer] ||= []).push(p); });
+    familyNames = new Set((byLayer.family || []).map(p => p.tag_name.toLowerCase()));
+  };
+  rebuildByLayer();
   const trackFams = new Set((t.tags || [])
     .map(g => (g.tag || "").toLowerCase()).filter(x => familyNames.has(x)));
   let showAllSubs = false;
@@ -430,14 +437,29 @@ async function openTagModal(pk, t, opts = {}) {
         const on = manual.has(p.tag_name.toLowerCase());
         return `<button class="chip ${on ? "active" : ""}" data-tag="${esc(p.tag_name)}">${on ? "✓ " : ""}${esc(p.tag_name)}</button>`;
       }).join("");
-      return `<div class="playlbl">${LAYER_LABEL[layer] || layer}</div><div class="palette-row">${chips}${extra}</div>`;
+      // Grow the vocabulary in place — no trip to the Tags tab (2026-07-06).
+      const newBtn = MANAGED_LAYERS.includes(layer)
+        ? `<button class="chip newprof" data-newlayer="${esc(layer)}" title="create a new ${layer} tag">+ new</button>` : "";
+      return `<div class="playlbl">${LAYER_LABEL[layer] || layer}</div><div class="palette-row">${chips}${newBtn}${extra}</div>`;
     }).join("") || '<div class="hint">No profiles seeded yet.</div>';
     const sa = palette.querySelector("#subs-showall");
     if (sa) sa.onclick = (e) => { e.preventDefault(); showAllSubs = !showAllSubs; renderPalette(); };
   };
   renderPalette();
 
+  // "+ new" opens the shared create-profile modal (family selector for
+  // subgenre). On success we re-fetch the profile list and re-render this
+  // palette so the new chip is immediately tappable.
+  const openNewProfile = (layer) => {
+    vpAdd(layer, { onCreated: async () => {
+      try { state.profileList = (await api("/api/reference/profiles")).profiles || []; } catch (e) {}
+      rebuildByLayer(); renderPalette();
+    }});
+  };
+
   palette.onclick = async (ev) => {
+    const nb = ev.target.closest(".newprof");
+    if (nb) { openNewProfile(nb.dataset.newlayer); return; }
     const btn = ev.target.closest(".chip"); if (!btn) return;
     const tag = btn.dataset.tag, key = tag.toLowerCase();
     btn.disabled = true;

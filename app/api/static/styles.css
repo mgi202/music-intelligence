@@ -256,6 +256,7 @@
   .palette-row { display: flex; flex-wrap: wrap; gap: 6px; }
   .palette-row .chip { flex-shrink: 1; }
   .palette-row .chip[disabled] { opacity: .5; }
+  .palette-row .chip.newprof { border-style: dashed; border-color: var(--accent); color: var(--accent); background: transparent; }
 
   /* Evidence + health */
   .evidence { background: var(--panel2); border-radius: 8px; padding: 10px; margin-top: 8px; font-size: 12px; }

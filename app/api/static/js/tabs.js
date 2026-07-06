@@ -34,7 +34,7 @@ function switchView(v) {
   $("playerbar").classList.toggle("hero-mode", v === "home");
   if (v === "home") { loadHome(); startHomePolling(); } else { stopHomePolling(); }
   if (v === "library") { loadTracks(); loadSourcePlaylists(); loadGrandTotal(); renderFacetRow(); }
-  if (v === "review") loadVerdict();
+  if (v === "review") enterVerdict();
   if (v === "playlists") loadPlaylists();
   if (v === "matches") loadMatches();
   if (v === "tags") loadTags();

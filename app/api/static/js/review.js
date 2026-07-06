@@ -74,9 +74,19 @@ async function loadVerdict() {
     ]);
     state.vq = q.tracks || []; state.vqMeta = q.meta || {}; state.vqIndex = 0;
     state.vqReadiness = r.profiles || [];
+    state.vqLoaded = true;
   } catch (e) { el.innerHTML = '<div class="empty">Couldn\'t load the queue.</div>'; return; }
   renderVerdict();
   vqStartClock();
+}
+
+// Re-entering the Review tab must NOT rebuild the queue — that would throw away
+// the card you were on and restart playback. Re-render the current card in place
+// (audio lives in the persistent player, so it keeps going). First-ever entry,
+// and the global ⟳ (full page reload), still fetch a fresh queue.
+function enterVerdict() {
+  if (state.vqLoaded) { renderVerdict(); vqStartClock(); }
+  else loadVerdict();
 }
 
 function setReviewSort(s) {
@@ -193,11 +203,11 @@ function renderVerdict() {
   }
 
   const funcChips = vqProfilesByLayer("functional").map((p, i) =>
-    `<span class="vq-chip ${t._sel.func === p.tag_name ? "on" : ""}" title="${esc(p.description || "")}" onclick="vqPickFunc('${esc(p.tag_name)}')"><kbd class="vqk">${VQ_FKEYS[i] || ""}</kbd>${esc(p.tag_name)}</span>`).join("");
+    `<span class="vq-chip ${t._sel.func === p.tag_name ? "on" : ""}" title="${esc(p.description || "")}" onclick="vqPickFunc('${jsarg(p.tag_name)}')"><kbd class="vqk">${VQ_FKEYS[i] || ""}</kbd>${esc(p.tag_name)}</span>`).join("");
   const persChips = vqProfilesByLayer("personal").map((p, i) =>
-    `<span class="vq-chip ${t._sel.personal.has(p.tag_name) ? "on" : ""}" title="${esc(p.description || "")}" onclick="vqTogglePersonal('${esc(p.tag_name)}')"><kbd class="vqk">${VQ_PKEYS[i] || ""}</kbd>${esc(p.tag_name)}</span>`).join("");
+    `<span class="vq-chip ${t._sel.personal.has(p.tag_name) ? "on" : ""}" title="${esc(p.description || "")}" onclick="vqTogglePersonal('${jsarg(p.tag_name)}')"><kbd class="vqk">${VQ_PKEYS[i] || ""}</kbd>${esc(p.tag_name)}</span>`).join("");
   const eraChips = vqProfilesByLayer("era").map((p, i) =>
-    `<span class="vq-chip ${t._sel.era === p.tag_name ? "on" : ""}" title="${esc(p.description || "")}" onclick="vqPickEra('${esc(p.tag_name)}')"><kbd class="vqk">${VQ_EKEYS[i] || ""}</kbd>${esc(p.tag_name)}</span>`).join("");
+    `<span class="vq-chip ${t._sel.era === p.tag_name ? "on" : ""}" title="${esc(p.description || "")}" onclick="vqPickEra('${jsarg(p.tag_name)}')"><kbd class="vqk">${VQ_EKEYS[i] || ""}</kbd>${esc(p.tag_name)}</span>`).join("");
   const eraHint = t.era_prefill
     ? (t.release_year ? `prefilled from ${t.release_year} — correct if vibe ≠ date, tap again to clear`
                       : "prefilled from weak evidence — correct or tap again to clear")
