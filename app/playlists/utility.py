@@ -331,9 +331,6 @@ LOCKED_TAG_PROFILES: list[dict] = [
     {"profile_id": "techno", "sort_order": 1, "tag_name": "techno", "taxonomy_layer": "family",
      "description": "Machine-driven, hypnotic, functional club music — Detroit "
                     "to Berlin."},
-    {"profile_id": "bass", "sort_order": 2, "tag_name": "bass", "taxonomy_layer": "family",
-     "description": "Umbrella family: UK garage, DnB, dubstep, breakbeat territory.",
-     "context_terms": ["jungle"]},
     {"profile_id": "ambient", "sort_order": 3, "tag_name": "ambient", "taxonomy_layer": "family",
      "description": "Beatless or near-beatless atmosphere — texture and space "
                     "over rhythm."},
@@ -363,8 +360,30 @@ LOCKED_TAG_PROFILES: list[dict] = [
     {"profile_id": "reggae", "sort_order": 10, "tag_name": "reggae", "taxonomy_layer": "family",
      "description": "The Jamaican lineage — reggae, dub and dancehall.",
      "context_terms": ["dancehall"]},
+    # 2026-07-06: the bass-music lineage promoted from subgenre to family
+    # (Matthias — "jungle, drum and bass and dubstep are genres, not subgenres").
+    # The old "bass" umbrella family is DISSOLVED; uk garage and breakbeat move
+    # up with them, and jungle (previously an alias into bass) becomes its own.
+    {"profile_id": "jungle", "sort_order": 11, "tag_name": "jungle", "taxonomy_layer": "family",
+     "description": "Chopped amen breaks, ragga basslines, rave energy — the 90s "
+                    "hardcore-continuum root of drum and bass."},
+    {"profile_id": "drum and bass", "sort_order": 12, "tag_name": "drum and bass", "taxonomy_layer": "family",
+     "description": "Fast broken beats over heavy sub-bass — jungle's "
+                    "streamlined descendant.",
+     "context_terms": ["drum n bass", "dnb", "drum & bass", "d&b"]},
+    {"profile_id": "dubstep", "sort_order": 13, "tag_name": "dubstep", "taxonomy_layer": "family",
+     "description": "Half-time sway, huge sub-bass, space — the UK original."},
+    {"profile_id": "uk garage", "sort_order": 14, "tag_name": "uk garage", "taxonomy_layer": "family",
+     "description": "Swung 2-step shuffle, chopped vocals, sub-bass — the UK's "
+                    "own garage.",
+     "context_terms": ["ukg"]},
+    {"profile_id": "breakbeat", "sort_order": 15, "tag_name": "breakbeat", "taxonomy_layer": "family",
+     "description": "Broken beats at club weight — breaks instead of "
+                    "four-to-the-floor.",
+     "context_terms": ["breaks"]},
 
-    # ── Subgenre — the precise layer (24, LOCKED 2026-07-03) ──
+    # ── Subgenre — the precise layer (LOCKED 2026-07-03; bass-lineage promoted
+    #    to family 2026-07-06) ──
     {"profile_id": "deep house", "parent_family": "house", "sort_order": 0, "tag_name": "deep house", "taxonomy_layer": "subgenre",
      "description": "Warm, soulful house — smoky chords, subdued energy, "
                     "late-night warmth."},
@@ -380,10 +399,6 @@ LOCKED_TAG_PROFILES: list[dict] = [
     {"profile_id": "garage house", "parent_family": "house", "sort_order": 4, "tag_name": "garage house", "taxonomy_layer": "subgenre",
      "description": "The New Jersey/NYC lineage — gospel-tinged, swung, "
                     "piano-led house."},
-    {"profile_id": "uk garage", "parent_family": "bass", "sort_order": 5, "tag_name": "uk garage", "taxonomy_layer": "subgenre",
-     "description": "Swung 2-step shuffle, chopped vocals, sub-bass — the UK's "
-                    "own garage.",
-     "context_terms": ["ukg"]},
     {"profile_id": "minimal", "parent_family": "techno", "sort_order": 6, "tag_name": "minimal", "taxonomy_layer": "subgenre",
      "description": "Reduction as the point — sparse, loopy, microscopic club "
                     "music.",
@@ -395,17 +410,6 @@ LOCKED_TAG_PROFILES: list[dict] = [
     {"profile_id": "nu-disco", "parent_family": "disco-funk", "sort_order": 8, "tag_name": "nu-disco", "taxonomy_layer": "subgenre",
      "description": "Disco re-tooled with modern production — loops, filters, "
                     "glitter."},
-    {"profile_id": "breakbeat", "parent_family": "bass", "sort_order": 9, "tag_name": "breakbeat", "taxonomy_layer": "subgenre",
-     "description": "Broken beats at club weight — breaks instead of "
-                    "four-to-the-floor.",
-     "context_terms": ["breaks"]},
-    {"profile_id": "drum and bass", "parent_family": "bass", "sort_order": 10, "tag_name": "drum and bass",
-     "taxonomy_layer": "subgenre",
-     "description": "Fast broken beats over heavy sub-bass — jungle's "
-                    "streamlined descendant.",
-     "context_terms": ["drum n bass", "dnb", "drum & bass", "d&b"]},
-    {"profile_id": "dubstep", "parent_family": "bass", "sort_order": 11, "tag_name": "dubstep", "taxonomy_layer": "subgenre",
-     "description": "Half-time sway, huge sub-bass, space — the UK original."},
     {"profile_id": "trance", "parent_family": "techno", "sort_order": 12, "tag_name": "trance", "taxonomy_layer": "subgenre",
      "description": "Arpeggios, long builds and euphoric release at full "
                     "stretch."},

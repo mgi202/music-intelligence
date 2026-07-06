@@ -47,8 +47,11 @@ def test_locked_profile_budget_is_55(db):
         conn.close()
     # 55 at the 2026-07-03 lock + pop rap (2026-07-05 one-off) = 56.
     assert n == 56
-    assert layers == {"functional": 8, "personal": 7, "family": 11,
-                      "subgenre": 25, "era": 5}
+    # Family 15 / subgenre 21 since 2026-07-06: the bass-music lineage (jungle,
+    # drum and bass, dubstep, uk garage, breakbeat) is family-layer and the old
+    # "bass" umbrella family is dissolved.
+    assert layers == {"functional": 8, "personal": 7, "family": 15,
+                      "subgenre": 21, "era": 5}
 
 
 def test_interim_subgenres_dropped_when_label_free_kept_with_labels(db):

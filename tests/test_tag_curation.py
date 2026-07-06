@@ -371,8 +371,9 @@ def test_api_reference_profiles_vocabulary(client, db):
     layers = [r["taxonomy_layer"] for r in rows]
     assert layers == sorted(layers)  # ordered by layer for grouping
     from collections import Counter
-    assert Counter(layers) == {"functional": 8, "personal": 7, "family": 11,
-                               "subgenre": 25, "era": 5}
+    # Family 15 / subgenre 21 since 2026-07-06 (bass-lineage promoted to family).
+    assert Counter(layers) == {"functional": 8, "personal": 7, "family": 15,
+                               "subgenre": 21, "era": 5}
     assert all({"profile_id", "tag_name", "taxonomy_layer", "description"} <= r.keys() for r in rows)
 
 

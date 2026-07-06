@@ -69,7 +69,6 @@ LOCKED_TAG_ALIASES: dict[str, str] = {
     "funk": "disco-funk",
     "soul": "r&b-soul",
     "dancehall": "reggae",
-    "jungle": "bass",
     "electro house": "house",
     # ── mechanical spelling variants ──
     "hip-hop": "hip hop",
@@ -117,6 +116,8 @@ LOCKED_TAG_HIDES: tuple[str, ...] = (
 # surfaces as itself again — same mechanics as approving a vocab suggestion.
 LOCKED_TAG_PROMOTIONS: tuple[str, ...] = (
     "pop rap",   # 2026-07-05: subgenre profile (hip hop family)
+    "jungle",    # 2026-07-06: promoted to a family (was an alias into bass) —
+                 # clears the old jungle→bass alias so it surfaces as itself
 )
 
 
