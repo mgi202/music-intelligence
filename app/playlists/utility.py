@@ -381,9 +381,15 @@ LOCKED_TAG_PROFILES: list[dict] = [
      "description": "Broken beats at club weight — breaks instead of "
                     "four-to-the-floor.",
      "context_terms": ["breaks"]},
+    # 2026-07-06: Latin family added from a library scan (Matthias). Its
+    # subgenres live in the subgenre block below.
+    {"profile_id": "latin", "sort_order": 16, "tag_name": "latin", "taxonomy_layer": "family",
+     "description": "The Latin-American songbook — reggaeton, salsa, bossa nova "
+                    "and the wider tropical/regional spectrum.",
+     "context_terms": ["latino", "latin music", "latin beats", "latin influences"]},
 
     # ── Subgenre — the precise layer (LOCKED 2026-07-03; bass-lineage promoted
-    #    to family 2026-07-06) ──
+    #    to family 2026-07-06; Latin subgenres added 2026-07-06) ──
     {"profile_id": "deep house", "parent_family": "house", "sort_order": 0, "tag_name": "deep house", "taxonomy_layer": "subgenre",
      "description": "Warm, soulful house — smoky chords, subdued energy, "
                     "late-night warmth."},
@@ -460,6 +466,35 @@ LOCKED_TAG_PROFILES: list[dict] = [
      "description": "Rap built for the chorus — melodic hooks, radio-scale "
                     "production, hip hop's mainstream lane.",
      "context_terms": ["pop rap", "pop-rap"]},
+    # ── Latin subgenres (2026-07-06, from a library scan; parent = latin) ──
+    {"profile_id": "reggaeton", "parent_family": "latin", "sort_order": 25, "tag_name": "reggaeton", "taxonomy_layer": "subgenre",
+     "description": "Dembow-driven urbano — the reggaeton beat, Spanish-language "
+                    "hooks, club energy.",
+     "context_terms": ["reggaetón", "perreo", "neoperreo"]},
+    {"profile_id": "dembow", "parent_family": "latin", "sort_order": 26, "tag_name": "dembow", "taxonomy_layer": "subgenre",
+     "description": "The Dominican dembow rhythm as its own genre — faster, "
+                    "rawer, riddim-driven."},
+    {"profile_id": "bossa nova", "parent_family": "latin", "sort_order": 27, "tag_name": "bossa nova", "taxonomy_layer": "subgenre",
+     "description": "Brazilian samba-jazz — soft nylon-guitar sway, cool vocal "
+                    "phrasing.",
+     "context_terms": ["bossanova"]},
+    {"profile_id": "latin pop", "parent_family": "latin", "sort_order": 28, "tag_name": "latin pop", "taxonomy_layer": "subgenre",
+     "description": "Mainstream Spanish/Portuguese-language pop — radio hooks "
+                    "with Latin rhythm.",
+     "context_terms": ["pop latino"]},
+    {"profile_id": "merengue", "parent_family": "latin", "sort_order": 29, "tag_name": "merengue", "taxonomy_layer": "subgenre",
+     "description": "Fast 2-step Dominican dance music — accordion, güira, "
+                    "relentless drive."},
+    {"profile_id": "salsa", "parent_family": "latin", "sort_order": 30, "tag_name": "salsa", "taxonomy_layer": "subgenre",
+     "description": "Afro-Cuban dance music — clave, brass stabs, montuno piano."},
+    {"profile_id": "cumbia", "parent_family": "latin", "sort_order": 31, "tag_name": "cumbia", "taxonomy_layer": "subgenre",
+     "description": "Colombian mid-tempo sway — the pan-Latin-American dance "
+                    "staple."},
+    {"profile_id": "bolero", "parent_family": "latin", "sort_order": 32, "tag_name": "bolero", "taxonomy_layer": "subgenre",
+     "description": "Slow romantic Latin ballad — guitar-led, dramatic vocal."},
+    {"profile_id": "bachata", "parent_family": "latin", "sort_order": 33, "tag_name": "bachata", "taxonomy_layer": "subgenre",
+     "description": "Dominican guitar romance — the signature bachata guitar "
+                    "lilt and bounce."},
 
     # ── Era — a production VIBE, not a release date (5, LOCKED 2026-07-03).
     #    "Sounds like", judged by ear — a 2023 track can be 80s-sound. The

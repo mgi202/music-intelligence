@@ -70,6 +70,17 @@ LOCKED_TAG_ALIASES: dict[str, str] = {
     "soul": "r&b-soul",
     "dancehall": "reggae",
     "electro house": "house",
+    # ── Latin cluster (2026-07-06) — variants fold into their subgenre / the
+    #    latin family; the profiles' context_terms drive queue suggestions ──
+    "reggaetón": "reggaeton",
+    "perreo": "reggaeton",
+    "neoperreo": "reggaeton",
+    "pop latino": "latin pop",
+    "bossanova": "bossa nova",
+    "latino": "latin",
+    "latin music": "latin",
+    "latin beats": "latin",
+    "latin influences": "latin",
     # ── mechanical spelling variants ──
     "hip-hop": "hip hop",
     "hiphop": "hip hop",

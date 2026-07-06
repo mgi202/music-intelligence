@@ -104,11 +104,10 @@ def test_reconcile_seeds_locked_vocab_counts(db):
     finally:
         conn.close()
     counts = {r["taxonomy_layer"]: r["n"] for r in rows}
-    # 56 total: 55 at the 2026-07-03 lock + pop rap (2026-07-05). Family 15 /
-    # subgenre 21 since 2026-07-06 — bass-lineage (jungle, drum and bass,
-    # dubstep, uk garage, breakbeat) promoted to family, "bass" umbrella dropped.
-    assert counts == {"functional": 8, "personal": 7, "family": 15,
-                      "subgenre": 21, "era": 5}
+    # 66 total. Family 16 / subgenre 30 since 2026-07-06: bass-lineage promoted
+    # to family + "bass" dropped, then the Latin family and its 9 subgenres added.
+    assert counts == {"functional": 8, "personal": 7, "family": 16,
+                      "subgenre": 30, "era": 5}
 
 
 # ── Queue exclusions + ordering ────────────────────────────────────────────────
