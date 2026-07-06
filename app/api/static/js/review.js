@@ -53,14 +53,21 @@ const VQ_FKEYS = ["q", "w", "e", "r", "t", "y", "u", "i"];   // functional chips
 const VQ_PKEYS = ["a", "s", "d", "f", "g", "h", "j", "k", "l"];
 const VQ_EKEYS = ["7", "8", "9", "0", "-"];                  // era chips — number row, decade order
 
+// The micro-question vocab (func/personal/era chips + tie-breakers). It's
+// invalidated (set to null) whenever the vocab manager adds/renames/retires a
+// profile, so every Review render path must reload it before drawing chips —
+// otherwise the chips silently render empty. Cheap no-op once cached.
+async function vqEnsureProfiles() {
+  if (state.vqProfiles) return;
+  try {
+    const d = await api("/api/reference/profiles");
+    state.vqProfiles = d.profiles || []; state.vqTiebreakers = d.tiebreakers || [];
+  } catch (e) { state.vqProfiles = []; state.vqTiebreakers = []; }
+}
+
 async function loadVerdict() {
   const el = $("review");
-  if (!state.vqProfiles) {
-    try {
-      const d = await api("/api/reference/profiles");
-      state.vqProfiles = d.profiles || []; state.vqTiebreakers = d.tiebreakers || [];
-    } catch (e) { state.vqProfiles = []; state.vqTiebreakers = []; }
-  }
+  await vqEnsureProfiles();
   if (!state.sourcePlaylists.length) {
     try { state.sourcePlaylists = await api("/api/source-playlists"); } catch (e) {}
   }
@@ -83,10 +90,13 @@ async function loadVerdict() {
 // Re-entering the Review tab must NOT rebuild the queue — that would throw away
 // the card you were on and restart playback. Re-render the current card in place
 // (audio lives in the persistent player, so it keeps going). First-ever entry,
-// and the global ⟳ (full page reload), still fetch a fresh queue.
-function enterVerdict() {
-  if (state.vqLoaded) { renderVerdict(); vqStartClock(); }
-  else loadVerdict();
+// and the global ⟳ (full page reload), still fetch a fresh queue. The vocab may
+// have been invalidated by an edit in the Tags tab while away, so reload it
+// before re-rendering or the chips would come back empty.
+async function enterVerdict() {
+  if (!state.vqLoaded) { loadVerdict(); return; }
+  await vqEnsureProfiles();
+  renderVerdict(); vqStartClock();
 }
 
 function setReviewSort(s) {
@@ -128,6 +138,10 @@ function vqProfilesByLayer(layer) {
 
 function renderVerdict() {
   const el = $("review");
+  // Safety net: the chip vocab must be present or the func/personal/era rows
+  // render empty (headers with no chips). If an edit invalidated it and a
+  // render slipped through, reload and re-render rather than draw empty.
+  if (!state.vqProfiles) { vqEnsureProfiles().then(renderVerdict); return; }
   if (state.vqIndex >= state.vq.length) {
     if (state.vq.length && state.vqMeta && state.vqMeta.eligible_total > state.vq.length) {
       loadVerdict(); return;   // fetch a fresh batch (judged tracks won't return)
@@ -438,6 +452,10 @@ async function vqAddTag() {
       }
     },
     onClose: async () => {
+      // A "+ new" profile created from inside the modal invalidates the chip
+      // vocab (vqProfiles=null) — reload it before re-rendering or the chips
+      // would come back empty.
+      await vqEnsureProfiles();
       try { const r = await api("/api/reference/readiness"); state.vqReadiness = r.profiles || []; } catch (e) {}
       if (bumped.length) {
         state.vqBumped = bumped.slice();
