@@ -196,3 +196,12 @@ def test_run_audio_batch_resolves_blocked_set(db, monkeypatch):
     # scans nothing.
     stats2 = version_discovery.run_audio_batch(db_path=db, sleep_s=0)
     assert stats2["scanned"] == 0
+
+
+def test_unknown_track_raises_valueerror(db):
+    """An embed failure for a track that doesn't exist raises ValueError (the
+    API turns this into a 404) rather than hitting the processing_events FK."""
+    import pytest
+    from app.enrichment import version_discovery
+    with pytest.raises(ValueError):
+        version_discovery.record_embed_failure("__nope__", "SomeVideoId", db_path=db)

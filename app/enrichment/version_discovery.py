@@ -1228,8 +1228,10 @@ def record_embed_failure(track_pk: str, video_id: str, error_code=None,
     id in the known-blocked cache, then tries to resolve an embeddable audio
     version. Returns {resolved, video_id, candidates}: if resolved, video_id is
     the replacement the player should cue immediately; otherwise it falls to the
-    'Open in YTM' panel."""
+    'Open in YTM' panel. Raises ValueError on an unknown track."""
     with db_conn(db_path) as conn:
+        if _load_track(conn, track_pk) is None:
+            raise ValueError(f"Track not found: {track_pk}")
         _record_blocked(conn, track_pk, video_id, error_code)
     res = _run_audio_discovery(track_pk, force=True, db_path=db_path,
                                blocked_video_id=video_id)
