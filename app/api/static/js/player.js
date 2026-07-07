@@ -28,7 +28,27 @@ function onYouTubeIframeAPIReady() {
 // YTM but not embeddable (error 101/150), plus removed/private (100) and bad
 // id / HTML5 errors (2/5). Rather than leave YouTube's grey "Video unavailable"
 // box, surface a one-tap "Open in YTM" (+ Skip when a next track exists).
-function onPlayerError(e) {
+async function onPlayerError(e) {
+  const it = (state.queue || [])[state.qIndex];
+  const vid = it && (it.playingId || it.videoId);
+  if (it && it.pk && vid && !it._triedResolve) {
+    it._triedResolve = true;                 // one auto-resolve per track
+    try {
+      const r = await fetch(`/api/tracks/${encodeURIComponent(it.pk)}/embed-failed`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ video_id: vid, error_code: e && e.data }),
+      });
+      if (r.ok) {
+        const j = await r.json();
+        if (j.resolved && j.video_id) {
+          it.playingId = j.video_id;         // now the embeddable audio version
+          hideUnavailable();
+          ytPlayer.loadVideoById({ videoId: j.video_id });
+          return;                            // played in-app, no grey box
+        }
+      }
+    } catch (_) { /* fall through to the panel */ }
+  }
   showUnavailable();
 }
 

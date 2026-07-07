@@ -267,6 +267,74 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         )
         print("Migration applied: playback_version_candidates.kind")
 
+    # 2026-07-07 (audio fallback): widen the kind CHECK to allow 'audio'. Only
+    # a DB first-created FROM schema.sql carries the table-level CHECK; a DB that
+    # got 'kind' via the ALTER above has NO check on it (SQLite ALTER can't add
+    # one) and already accepts 'audio', so this rebuild is skipped there. Rebuild
+    # only when the DDL has a kind CHECK that lacks 'audio'.
+    pvc_ddl = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' "
+        "AND name='playback_version_candidates'"
+    ).fetchone()
+    if (pvc_ddl and pvc_ddl["sql"] and "CHECK (kind IN" in pvc_ddl["sql"]
+            and "'audio'" not in pvc_ddl["sql"]):
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.executescript(
+            """
+            CREATE TABLE playback_version_candidates_new (
+                candidate_id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                track_pk                TEXT NOT NULL,
+                video_id                TEXT NOT NULL,
+                candidate_title         TEXT,
+                candidate_channel       TEXT,
+                candidate_duration_ms   INTEGER,
+                result_type             TEXT,
+                title_similarity        REAL DEFAULT 0.0,
+                artist_similarity       REAL DEFAULT 0.0,
+                duration_score          REAL DEFAULT 0.0,
+                keyword_score           REAL DEFAULT 0.0,
+                uploader_score          REAL DEFAULT 0.0,
+                veto_reason             TEXT,
+                confidence              REAL DEFAULT 0.0,
+                kind                    TEXT NOT NULL DEFAULT 'extended' CHECK (kind IN (
+                    'extended', 'video', 'audio'
+                )),
+                status                  TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+                    'pending', 'auto_applied', 'approved', 'rejected', 'superseded'
+                )),
+                discovered_at           TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                decided_at              TEXT,
+                created_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (track_pk, video_id),
+                FOREIGN KEY (track_pk) REFERENCES tracks(track_pk) ON DELETE CASCADE
+            );
+            INSERT INTO playback_version_candidates_new
+                (candidate_id, track_pk, video_id, candidate_title,
+                 candidate_channel, candidate_duration_ms, result_type,
+                 title_similarity, artist_similarity, duration_score,
+                 keyword_score, uploader_score, veto_reason, confidence,
+                 kind, status, discovered_at, decided_at, created_at, updated_at)
+            SELECT
+                 candidate_id, track_pk, video_id, candidate_title,
+                 candidate_channel, candidate_duration_ms, result_type,
+                 title_similarity, artist_similarity, duration_score,
+                 keyword_score, uploader_score, veto_reason, confidence,
+                 kind, status, discovered_at, decided_at, created_at, updated_at
+            FROM playback_version_candidates;
+            DROP TABLE playback_version_candidates;
+            ALTER TABLE playback_version_candidates_new
+                RENAME TO playback_version_candidates;
+            CREATE INDEX IF NOT EXISTS idx_pvc_track
+                ON playback_version_candidates(track_pk);
+            CREATE INDEX IF NOT EXISTS idx_pvc_status
+                ON playback_version_candidates(status);
+            """
+        )
+        conn.execute("PRAGMA foreign_keys = ON")
+        print("Migration applied: playback_version_candidates.kind CHECK widened for 'audio'")
+
     # playlist_rules: sync-safety columns (v3)
     pr_cols = {row["name"] for row in conn.execute("PRAGMA table_info(playlist_rules)")}
     if pr_cols and "last_synced_hash" not in pr_cols:

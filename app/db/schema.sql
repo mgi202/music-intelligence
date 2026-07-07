@@ -147,8 +147,11 @@ CREATE TABLE IF NOT EXISTS playback_version_candidates (
     -- 'video' feeds tracks.official_video_id (prefer-videos toggle) — found
     -- by the official-video/remix search, quality-checked against YTM's own
     -- Song↔Video counterpart pairing.
+    -- 2026-07-07 (audio fallback): 'audio' also feeds playback_video_id — the
+    -- embeddable ATV (Artist - Topic) audio version found to replace a Vevo/OMV
+    -- id the in-app player can't embed (IFrame error 100/101/150).
     kind                    TEXT NOT NULL DEFAULT 'extended' CHECK (kind IN (
-        'extended', 'video'
+        'extended', 'video', 'audio'
     )),
     status                  TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
         'pending',        -- awaiting Matthias
@@ -166,6 +169,20 @@ CREATE TABLE IF NOT EXISTS playback_version_candidates (
 );
 CREATE INDEX IF NOT EXISTS idx_pvc_track  ON playback_version_candidates(track_pk);
 CREATE INDEX IF NOT EXISTS idx_pvc_status ON playback_version_candidates(status);
+
+-- ── Embed-blocked video cache (2026-07-07) ───────────────────────────────────
+-- Videos the in-app player reported as un-embeddable (YT IFrame error
+-- 100/101/150 — Vevo/OMV uploads are the usual entries). The playable-audio
+-- resolver reads this to never re-pick a known-bad id; the player can pre-skip
+-- a doomed embed. One row per video id (deduped across tracks that share it).
+CREATE TABLE IF NOT EXISTS embed_blocked_videos (
+    video_id        TEXT PRIMARY KEY,           -- 11-char YouTube id that refused to embed
+    track_pk        TEXT,                        -- a track observed trying to play it
+    error_code      TEXT,                        -- YT IFrame error code (100/101/150/2/5)
+    first_seen_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_embed_blocked_track ON embed_blocked_videos(track_pk);
 
 CREATE TABLE IF NOT EXISTS audio_features (
     track_pk                TEXT PRIMARY KEY,

@@ -472,6 +472,26 @@ def search_video_candidates(track_pk: str):
     return {"track_pk": track_pk, "candidates": candidates}
 
 
+class EmbedFailure(BaseModel):
+    video_id: str
+    error_code: int | str | None = None
+
+
+@app.post("/api/tracks/{track_pk}/embed-failed")
+def report_embed_failure(track_pk: str, body: EmbedFailure):
+    """The in-app player reports a YouTube embed error (100/101/150/2/5) for a
+    track. Cache the blocked id, then try to resolve an embeddable audio (ATV)
+    version and repoint playback_video_id. Returns {resolved, video_id,
+    candidates}: when resolved, the player cues video_id immediately; otherwise
+    it falls back to the Open-in-YTM panel."""
+    from app.enrichment import version_discovery
+    try:
+        return version_discovery.record_embed_failure(
+            track_pk, body.video_id, error_code=body.error_code)
+    except ValueError:
+        raise HTTPException(404, "Track not found")
+
+
 @app.get("/api/version-candidates")
 def list_version_candidates(status: str = Query("pending"), limit: int = Query(200, le=1000)):
     """Review queue — candidates in a given status, joined to track identity.

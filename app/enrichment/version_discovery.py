@@ -522,7 +522,7 @@ def _now() -> str:
 def _load_track(conn, track_pk: str) -> dict | None:
     row = conn.execute(
         """SELECT track_pk, canonical_title, canonical_artist, normalized_title,
-                  normalized_artist, duration_ms, playback_video_id,
+                  normalized_artist, duration_ms, ytm_track_id, playback_video_id,
                   official_video_id, official_video_checked_at
              FROM tracks WHERE track_pk = ?""",
         (track_pk,),
@@ -949,6 +949,339 @@ def run_video_batch(limit: int | None = None, sleep_s: float = 2.0,
                 "WHERE track_pk = ?",
                 (_now(), _now(), pk),
             )
+
+    return {"scanned": scanned, "auto_applied": auto_applied,
+            "pending": pending, "discarded": discarded}
+
+
+# ── Playable-audio discovery (kind='audio') — Vevo/OMV embed fallback ─────────
+# Vevo/label official-music-video uploads (OMV) return IFrame errors 100/101/150
+# and won't play inside the in-app embed. This finder locates the SAME
+# recording's embeddable audio upload — the 'Artist - Topic' auto-channel track
+# (ATV) — and points tracks.playback_video_id at it, so the track plays in-app
+# instead of bouncing to YTM.
+#
+# Differences from its siblings:
+#   - vs extended: wants the SAME length, not a longer cut.
+#   - vs video:    wants plain audio, and VEVO channels are a VETO here (another
+#                  OMV is exactly what we're trying to get away from).
+# It runs on two triggers: record_embed_failure() (the player reports a live
+# embed error) and run_audio_batch() (a sweep over the known-blocked set). Some
+# ATVs are themselves embed-disabled (a KAROL G-style exclusive) or absent — for
+# those nothing is applied and the track keeps its "Open in YTM" fallback.
+
+_W_A_TITLE = 0.35
+_W_A_ARTIST = 0.30
+_W_A_DURATION = 0.15
+_W_A_UPLOADER = 0.20
+
+# A plain-audio result should NOT look like an official/music video.
+_KW_OFFICIAL_VIDEO = re.compile(
+    r"\bofficial\s+video\b|\bmusic\s+video\b|\bm/?v\b", re.IGNORECASE
+)
+
+
+def _known_blocked_ids(conn) -> set[str]:
+    """Video ids the player has reported as un-embeddable. Empty if the cache
+    table doesn't exist yet (pre-migration)."""
+    try:
+        return {r["video_id"] for r in conn.execute(
+            "SELECT video_id FROM embed_blocked_videos")}
+    except Exception:  # noqa: BLE001 — table may not exist on an un-migrated DB
+        return set()
+
+
+def _audio_duration_score(canon_ms: int, cand_ms: int) -> float | None:
+    """Same-length preference — reuse the official-video curve (peak within
+    ±10%, zero by ±60%, hard-gate teasers/sets)."""
+    return _video_duration_score(canon_ms, cand_ms)
+
+
+def _audio_uploader_score(channel: str, track_artist_norm: str, result_type: str) -> float:
+    """Label/artist-provisioned audio scores 1.0 (a 'song' hit or an
+    'Artist - Topic' channel). A VEVO channel scores 0 — it's another OMV."""
+    if _VEVO_RE.search((channel or "").strip()):
+        return 0.0
+    return _uploader_score(channel, track_artist_norm, result_type)
+
+
+def _audio_veto_reason(raw_title: str, track_artist_norm: str, base_title_norm: str,
+                       channel: str, video_id: str | None,
+                       known_blocked: set[str]) -> str | None:
+    """Disqualify a candidate as the playable audio version."""
+    if video_id and video_id in known_blocked:
+        return "known embed-blocked"
+    if _VEVO_RE.search((channel or "").strip()):
+        return "vevo channel (still an omv)"
+    low = raw_title.lower()
+    for pat, reason in _VETO_PATTERNS:
+        if pat.search(low):
+            return reason
+    if re.search(r"\binstrumental\b", low) and "instrumental" not in base_title_norm:
+        return "instrumental"
+    # A remix candidate is only wrong when OUR track isn't that remix; when the
+    # base track is itself a remix (J.Lo "Ain't It Funny (Murder Remix)"), the
+    # title_similarity gate keeps us to the same remix.
+    if _REMIX_RE.search(low) and "remix" not in base_title_norm:
+        m = _REMIXER_RE.search(raw_title)
+        remixer = _norm(m.group(1)) if m else ""
+        if not remixer or _token_set_ratio(remixer, track_artist_norm) < 0.6:
+            return "remix (different artist)"
+    return None
+
+
+def _score_audio_candidate(track: dict, result: dict, known_blocked: set[str]) -> dict | None:
+    """Score one raw 'songs' search result as the playable-audio version.
+    Returns the persistable dict (kind handled by the caller) or None on the
+    duration hard gate."""
+    canon_ms = track.get("duration_ms")
+    cand_ms = _duration_ms(result)
+    if not canon_ms or not cand_ms:
+        return None
+    dur = _audio_duration_score(int(canon_ms), int(cand_ms))
+    if dur is None:
+        return None
+
+    base_title_norm = _norm(track.get("normalized_title") or track.get("canonical_title"))
+    track_artist_norm = _norm(track.get("normalized_artist") or track.get("canonical_artist"))
+
+    raw_title = result.get("title", "") or ""
+    channel = _artists_str(result) or (result.get("author") or "")
+    result_type = (result.get("resultType") or result.get("result_type") or "").lower()
+    video_id = result.get("videoId")
+
+    cand_title_norm = _norm(normalise_title(raw_title))
+    title_sim = _token_set_ratio(cand_title_norm, base_title_norm)
+
+    cand_artist_norm = _norm(normalise_artist(_artists_str(result)))
+    chan_artist_norm = _norm(_strip_topic(channel))
+    artist_sim = max(
+        _token_set_ratio(cand_artist_norm, track_artist_norm),
+        _token_set_ratio(chan_artist_norm, track_artist_norm),
+    )
+
+    up = _audio_uploader_score(channel, track_artist_norm, result_type)
+    # Audit-only audio-ness flag (not weighted): a video-looking title is a
+    # negative sign, plain audio positive.
+    kw = 0.0 if _KW_OFFICIAL_VIDEO.search(raw_title) else 1.0
+
+    veto = _audio_veto_reason(raw_title, track_artist_norm, base_title_norm,
+                              channel, video_id, known_blocked)
+    if veto:
+        confidence = 0.0
+    else:
+        confidence = (_W_A_TITLE * title_sim + _W_A_ARTIST * artist_sim
+                      + _W_A_DURATION * dur + _W_A_UPLOADER * up)
+
+    return {
+        "video_id": video_id,
+        "candidate_title": raw_title,
+        "candidate_channel": channel,
+        "candidate_duration_ms": int(cand_ms),
+        "result_type": result_type or None,
+        "title_similarity": round(title_sim, 4),
+        "artist_similarity": round(artist_sim, 4),
+        "duration_score": round(dur, 4),
+        "keyword_score": kw,
+        "uploader_score": up,
+        "veto_reason": veto,
+        "confidence": round(confidence, 4),
+    }
+
+
+def _search_audio_candidates(track: dict) -> list[dict]:
+    """Songs-scope queries (ATV audio uploads), deduped on videoId."""
+    client = _get_client()
+    artist = track.get("canonical_artist") or ""
+    title = track.get("canonical_title") or ""
+    queries = [f"{artist} {title}", f"{artist} {title} audio"]
+    seen: set[str] = set()
+    out: list[dict] = []
+    for query in queries:
+        try:
+            results = client.search(query, filter="songs", limit=5) or []
+        except Exception:  # noqa: BLE001 — a bad query must not sink the rest
+            continue
+        for r in results:
+            vid = r.get("videoId")
+            if not vid or vid in seen:
+                continue
+            seen.add(vid)
+            r.setdefault("resultType", "song")
+            out.append(r)
+    return out
+
+
+def _run_audio_discovery(track_pk: str, force: bool, db_path: str | None,
+                         blocked_video_id: str | None = None) -> dict:
+    """Search for the embeddable audio version, score, persist (kind='audio'),
+    and auto-apply the best qualifying candidate over playback_video_id.
+
+    Unlike the extended pipeline this DOES run when playback_video_id is already
+    set — the whole point is to replace a blocked id. The current playable id
+    and every known-blocked id are excluded from selection."""
+    with db_conn(db_path) as conn:
+        track = _load_track(conn, track_pk)
+        if track is None:
+            raise ValueError(f"Track not found: {track_pk}")
+
+        known_blocked = _known_blocked_ids(conn)
+        if blocked_video_id:
+            known_blocked = known_blocked | {blocked_video_id}
+        current_id = track.get("playback_video_id") or track.get("ytm_track_id")
+
+        results = _search_audio_candidates(track)
+
+        discarded = 0
+        fresh_qualifying: list[int] = []
+        now = _now()
+        for r in results:
+            scored = _score_audio_candidate(track, r, known_blocked)
+            if scored is None or not scored["video_id"]:
+                discarded += 1
+                continue
+            if scored["video_id"] == current_id:
+                discarded += 1  # the version we already (fail to) play
+                continue
+            if scored["veto_reason"] is None and scored["confidence"] < _DISCARD_BELOW_CONFIDENCE:
+                discarded += 1
+                continue
+            existing = conn.execute(
+                "SELECT candidate_id, status FROM playback_version_candidates "
+                "WHERE track_pk = ? AND video_id = ?",
+                (track_pk, scored["video_id"]),
+            ).fetchone()
+            if existing:
+                continue  # sticky — includes prior rejections
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO playback_version_candidates (
+                       track_pk, video_id, candidate_title, candidate_channel,
+                       candidate_duration_ms, result_type,
+                       title_similarity, artist_similarity, duration_score,
+                       keyword_score, uploader_score, veto_reason, confidence,
+                       kind, status, discovered_at, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'audio',
+                           'pending', ?, ?, ?)""",
+                (track_pk, scored["video_id"], scored["candidate_title"],
+                 scored["candidate_channel"], scored["candidate_duration_ms"],
+                 scored["result_type"], scored["title_similarity"],
+                 scored["artist_similarity"], scored["duration_score"],
+                 scored["keyword_score"], scored["uploader_score"],
+                 scored["veto_reason"], scored["confidence"], now, now, now),
+            )
+            if cur.lastrowid and _passes_gates(scored):
+                fresh_qualifying.append(cur.lastrowid)
+
+        auto_applied = 0
+        applied_video: str | None = None
+        if fresh_qualifying:
+            best = max(
+                fresh_qualifying,
+                key=lambda cid: conn.execute(
+                    "SELECT confidence FROM playback_version_candidates WHERE candidate_id = ?",
+                    (cid,),
+                ).fetchone()["confidence"],
+            )
+            res = _apply(conn, best, "auto_applied")
+            applied_video = res["video_id"]
+            auto_applied = 1
+
+        candidates = _ranked_candidates(conn, track_pk, kind="audio")
+
+    return {"candidates": candidates, "discarded": discarded,
+            "auto_applied": auto_applied, "applied_video_id": applied_video}
+
+
+def _record_blocked(conn, track_pk: str, video_id: str, error_code) -> None:
+    now = _now()
+    conn.execute(
+        """INSERT INTO embed_blocked_videos (video_id, track_pk, error_code,
+                                             first_seen_at, updated_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(video_id) DO UPDATE SET
+               updated_at = excluded.updated_at,
+               track_pk   = excluded.track_pk""",
+        (video_id, track_pk, str(error_code) if error_code is not None else None, now, now),
+    )
+    conn.execute(
+        """INSERT INTO processing_events (track_pk, event_type, status, message, payload_json)
+           VALUES (?, ?, ?, ?, ?)""",
+        (track_pk, "embed_failure", "blocked",
+         f"embed blocked for {video_id} (error {error_code})",
+         json.dumps({"video_id": video_id, "error_code": error_code})),
+    )
+
+
+# ── Public API (audio) ────────────────────────────────────────────────────────
+
+def discover_audio_for_track(track_pk: str, force: bool = True,
+                             db_path: str | None = None) -> list[dict]:
+    """Search YTM for the embeddable audio version, score, persist, and
+    auto-apply the top candidate over playback_video_id. Returns the ranked
+    stored kind='audio' candidates."""
+    return _run_audio_discovery(track_pk, force, db_path)["candidates"]
+
+
+def record_embed_failure(track_pk: str, video_id: str, error_code=None,
+                         db_path: str | None = None) -> dict:
+    """Called when the player reports an embed error (100/101/150). Records the
+    id in the known-blocked cache, then tries to resolve an embeddable audio
+    version. Returns {resolved, video_id, candidates}: if resolved, video_id is
+    the replacement the player should cue immediately; otherwise it falls to the
+    'Open in YTM' panel."""
+    with db_conn(db_path) as conn:
+        _record_blocked(conn, track_pk, video_id, error_code)
+    res = _run_audio_discovery(track_pk, force=True, db_path=db_path,
+                               blocked_video_id=video_id)
+    return {"resolved": bool(res["applied_video_id"]),
+            "video_id": res["applied_video_id"],
+            "candidates": res["candidates"]}
+
+
+def _select_audio_batch(conn, limit: int) -> list[str]:
+    """Tracks whose CURRENT playable id is still a known-blocked one — i.e. not
+    yet rescued. Once resolution moves playback_video_id to the ATV, the track
+    stops matching and drops out, so the sweep converges."""
+    return [
+        r["track_pk"] for r in conn.execute(
+            """SELECT DISTINCT b.track_pk
+                 FROM embed_blocked_videos b
+                 JOIN tracks t ON t.track_pk = b.track_pk
+                WHERE b.video_id = COALESCE(t.playback_video_id, t.ytm_track_id)
+                LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    ]
+
+
+def run_audio_batch(limit: int | None = None, sleep_s: float = 2.0,
+                    db_path: str | None = None) -> dict:
+    """Worker/CLI stage: resolve the known-blocked set to embeddable audio.
+
+    Same discipline as run_batch — polite sleeps between YTM searches, one bad
+    track never sinks the pass. Returns {scanned, auto_applied, pending,
+    discarded}."""
+    if limit is None:
+        limit = int(os.getenv("AUDIO_DISCOVERY_BATCH_SIZE", "25"))
+
+    conn = get_connection(db_path)
+    try:
+        pks = _select_audio_batch(conn, limit)
+    finally:
+        conn.close()
+
+    scanned = auto_applied = pending = discarded = 0
+    for i, pk in enumerate(pks):
+        if i and sleep_s:
+            time.sleep(sleep_s)
+        try:
+            res = _run_audio_discovery(pk, force=True, db_path=db_path)
+        except Exception:  # noqa: BLE001 — one bad track must not sink the pass
+            continue
+        scanned += 1
+        auto_applied += res["auto_applied"]
+        discarded += res["discarded"]
+        pending += sum(1 for c in res["candidates"] if c["status"] == "pending")
 
     return {"scanned": scanned, "auto_applied": auto_applied,
             "pending": pending, "discarded": discarded}
