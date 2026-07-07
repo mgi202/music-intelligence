@@ -42,7 +42,16 @@
         <a id="np-ytm" href="#" target="_blank" style="color:var(--accent);font-size:11px;text-decoration:none">open in YTM <i class="ti ti-external-link" style="font-size:10px"></i></a>
       </div>
     </div>
-    <div id="ytplayer-wrap"><div id="ytplayer"></div><button id="pb-expand" onclick="expandVideo()" title="Full screen"><i class="ti ti-arrows-maximize"></i></button></div>
+    <div id="ytplayer-wrap"><div id="ytplayer"></div><button id="pb-expand" onclick="expandVideo()" title="Full screen"><i class="ti ti-arrows-maximize"></i></button>
+      <div id="pb-unavail" class="pb-unavail" hidden>
+        <div class="pbu-title"><i class="ti ti-alert-triangle"></i> Can't play here</div>
+        <div class="pbu-sub">A YouTube&nbsp;Music exclusive — plays in the app.</div>
+        <div class="pbu-actions">
+          <a id="pbu-ytm" href="#" target="_blank" rel="noopener" class="pbu-open"><i class="ti ti-external-link"></i> Open in YTM</a>
+          <button id="pbu-skip" onclick="nextTrack()" class="pbu-skip">Skip →</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 

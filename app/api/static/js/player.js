@@ -18,14 +18,49 @@ function onYouTubeIframeAPIReady() {
         else if (pendingCue) doCue();
       },
       onStateChange: onPlayerState,
+      onError: onPlayerError,
     },
   });
+}
+
+// YouTube refuses a subset of tracks in the embed — most often YTM "Art Tracks"
+// (the auto-generated "<artist> - Topic" audio uploads) which are licensed for
+// YTM but not embeddable (error 101/150), plus removed/private (100) and bad
+// id / HTML5 errors (2/5). Rather than leave YouTube's grey "Video unavailable"
+// box, surface a one-tap "Open in YTM" (+ Skip when a next track exists).
+function onPlayerError(e) {
+  showUnavailable();
+}
+
+function showUnavailable() {
+  const it = (state.queue || [])[state.qIndex]; if (!it) return;
+  const vid = it.playingId || it.videoId;
+  const box = $("pb-unavail");
+  if (box) {
+    $("pbu-ytm").href = `https://music.youtube.com/watch?v=${vid}`;
+    $("pbu-skip").hidden = state.qIndex + 1 >= state.queue.length;
+    box.hidden = false;
+  }
+  // Compact mode hides the video box, so mark the label + toast too. loadQ
+  // rebuilds #np on the next track, which clears the marker on its own.
+  if ($("np") && !$("np-unavail")) {
+    $("np").insertAdjacentHTML("beforeend",
+      ' <span id="np-unavail" style="color:var(--danger);font-size:11px">· not playable here</span>');
+  }
+  const hasNext = state.qIndex + 1 < (state.queue || []).length;
+  toast(hasNext ? "Can't play here — Open in YTM, or press Next"
+                : "Can't play here — Open in YTM");
+}
+
+function hideUnavailable() {
+  const box = $("pb-unavail"); if (box) box.hidden = true;
+  const w = $("np-unavail"); if (w) w.remove();
 }
 
 function onPlayerState(e) {
   if (e.data === YT.PlayerState.ENDED) { nextTrack(); return; }
   const btn = $("pb-play");
-  if (e.data === YT.PlayerState.PLAYING) { btn.innerHTML = '<i class="ti ti-player-pause"></i>'; startProg(); }
+  if (e.data === YT.PlayerState.PLAYING) { hideUnavailable(); btn.innerHTML = '<i class="ti ti-player-pause"></i>'; startProg(); }
   else if (e.data === YT.PlayerState.PAUSED) { btn.innerHTML = '<i class="ti ti-player-play"></i>'; }
   else if (e.data === YT.PlayerState.CUED) {
     // Restored-after-refresh state: show the saved position, wait for a tap.
@@ -144,6 +179,7 @@ async function resolveOfficial(pk) {
 
 async function loadQ(i) {
   if (i < 0 || i >= state.queue.length) return;
+  hideUnavailable();   // clear any "can't play here" notice from the prior track
   state.qIndex = i;
   const item = state.queue[i];
   let vid = item.videoId;
