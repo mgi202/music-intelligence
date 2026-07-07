@@ -127,6 +127,33 @@
   .pb-fill { height: 100%; width: 0; background: var(--accent); border-radius: 999px; }
   .track.playing { box-shadow: inset 3px 0 0 var(--accent); }
 
+  /* Mini player — docked bottom bar on every tab except Home. It's the SAME
+     #playerbar node (never reparented, so the YT iframe keeps playing); CSS
+     alone reflows the hero into a slim transport strip whenever it's visible
+     and not in hero-mode. Nothing in the JS needs to know. */
+  #playerbar.visible:not(.hero-mode) {
+    display: block; position: fixed; left: 0; right: 0; bottom: 0; z-index: 25;
+    padding: 8px 48px 8px 14px; border-top: 1px solid #23232e; border-bottom: none;
+    box-shadow: 0 -6px 20px rgba(0,0,0,.45);
+  }
+  #playerbar:not(.hero-mode) .pb-grid { gap: 12px; }
+  #playerbar:not(.hero-mode) #pb-art { width: 46px; height: 46px; }
+  #playerbar:not(.hero-mode) #ytplayer-wrap,
+  #playerbar:not(.hero-mode) .pb-lbl { display: none; }
+  #playerbar:not(.hero-mode) .pb-main { display: flex; align-items: center; gap: 16px; }
+  #playerbar:not(.hero-mode) .nowplaying { flex: 0 1 260px; min-width: 90px; }
+  #playerbar:not(.hero-mode) .nowplaying #np { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #playerbar:not(.hero-mode) .nowplaying .closebtn { position: absolute; top: 50%; right: 14px; transform: translateY(-50%); font-size: 16px; }
+  #playerbar:not(.hero-mode) .pb-controls { flex: 1; margin-top: 0; }
+  #playerbar:not(.hero-mode) .pb-bottom { flex: 0 0 auto; margin-top: 0; }
+  /* Mini bar keeps only the "open in YTM" link — stars, tag chips and the
+     video toggle stay on the roomy Home hero. */
+  #playerbar:not(.hero-mode) #pb-stars,
+  #playerbar:not(.hero-mode) #pb-vidpref { display: none; }
+  #playerbar:not(.hero-mode) #pb-tags { display: none !important; }
+  /* Lift page content so the fixed bar never covers the last rows / actions. */
+  body:has(#playerbar.visible:not(.hero-mode)) main { padding-bottom: 84px; }
+
   /* Home hub: three panes. Both rails fixed at 180px — the track table is
      always the widest panel (locked v9 decision). */
   #home { display: grid; grid-template-columns: 180px minmax(0,1fr) 180px; gap: 12px; align-items: start; }

@@ -276,7 +276,7 @@ def test_era_profiles_never_appear_as_suggestions(db):
     from app.tags.verdict_queue import build_queue
     with db_conn(db) as c:
         insert_track(c, "t1", canonical_artist="A", ytm_track_id="v1")
-        _pub(c, "t1", "modern", "lastfm", 0.9)
+        _pub(c, "t1", "modern-sound", "lastfm", 0.9)
         _pub(c, "t1", "80s-sound", "lastfm", 0.9)
     sugg = build_queue(db_path=db)["tracks"][0]["suggestions"]
     assert all(s["taxonomy_layer"] != "era" for s in sugg)
@@ -289,8 +289,8 @@ def test_era_profiles_never_appear_as_suggestions(db):
     ("1984", "80s-sound"),
     ("1991-01-01", "90s-sound"),
     ("2004-11-30", "00s-sound"),
-    ("2015", "modern"),
-    ("2026-05-01", "modern"),
+    ("2015", "modern-sound"),
+    ("2026-05-01", "modern-sound"),
     ("1968-01-01", None),        # pre-1970: no claim
     (None, None),
 ])
@@ -314,10 +314,10 @@ def test_era_prefill_weak_evidence_from_hidden_decade_tags(db):
         _pub(c, "t1", "80s", "lastfm", 0.9)
         insert_track(c, "t2", canonical_artist="B", ytm_track_id="v2",
                      release_date="2019-01-01")
-        _pub(c, "t2", "90s", "lastfm", 0.9)   # year wins → modern, not 90s
+        _pub(c, "t2", "90s", "lastfm", 0.9)   # year wins → modern-sound, not 90s
     by_pk = {t["pk"]: t for t in build_queue(db_path=db)["tracks"]}
     assert by_pk["t1"]["era_prefill"] == "80s-sound"
-    assert by_pk["t2"]["era_prefill"] == "modern"
+    assert by_pk["t2"]["era_prefill"] == "modern-sound"
 
 
 # ── Era flows through the same reference machinery ──────────────────────────
@@ -333,7 +333,7 @@ def test_era_manual_tag_derives_positive_and_non_neighbour_negatives(db):
     assert ("90s-sound", "positive") in labels
     # Non-neighbours become negatives…
     assert ("70s-sound", "negative") in labels
-    assert ("modern", "negative") in labels
+    assert ("modern-sound", "negative") in labels
     # …adjacent decades never do (the 80s/90s blur is real).
     assert ("80s-sound", "negative") not in labels
     assert ("00s-sound", "negative") not in labels
@@ -343,7 +343,7 @@ def test_api_reference_profiles_serves_era_layer(client, db):
     data = client.get("/api/reference/profiles").json()
     eras = [p for p in data["profiles"] if p["taxonomy_layer"] == "era"]
     assert [p["tag_name"] for p in eras] == [
-        "70s-sound", "80s-sound", "90s-sound", "00s-sound", "modern"
+        "70s-sound", "80s-sound", "90s-sound", "00s-sound", "modern-sound"
     ]
     assert all(p["description"] for p in eras)   # tooltips render from these
 
@@ -391,7 +391,7 @@ def test_era_prefill_follows_a_renamed_decade_slot(db):
     confirm-or-correct prefill — it follows the rename tombstone."""
     from app.tags import vocab_manager
     from app.tags.verdict_queue import build_queue
-    vocab_manager.rename_profile("modern", "current-sound", db_path=db)
+    vocab_manager.rename_profile("modern-sound", "current-sound", db_path=db)
     with db_conn(db) as c:
         insert_track(c, "t1", canonical_artist="A", ytm_track_id="v1",
                      release_date="2015-01-01")
@@ -404,7 +404,7 @@ def test_era_prefill_dropped_when_decade_slot_retired(db):
     preselect it — prefill returns None rather than a dead name."""
     from app.tags import vocab_manager
     from app.tags.verdict_queue import build_queue
-    vocab_manager.retire_profile("modern", db_path=db)
+    vocab_manager.retire_profile("modern-sound", db_path=db)
     with db_conn(db) as c:
         insert_track(c, "t1", canonical_artist="A", ytm_track_id="v1",
                      release_date="2015-01-01")

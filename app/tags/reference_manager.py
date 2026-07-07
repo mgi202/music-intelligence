@@ -68,9 +68,9 @@ _OPPOSING_PROFILES_DECL: dict[str, tuple[str, ...]] = {
     # ── era (production vibe) — each decade opposes its NON-neighbours only;
     #    adjacent decades are never opponents (the 80s/90s blur is real, and
     #    modern is 00s-adjacent). Declared one direction; symmetrised at load. ──
-    "70s-sound": ("90s-sound", "00s-sound", "modern"),
-    "80s-sound": ("00s-sound", "modern"),
-    "90s-sound": ("modern",),
+    "70s-sound": ("90s-sound", "00s-sound", "modern-sound"),
+    "80s-sound": ("00s-sound", "modern-sound"),
+    "90s-sound": ("modern-sound",),
 }
 
 

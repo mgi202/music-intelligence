@@ -513,7 +513,9 @@ LOCKED_TAG_PROFILES: list[dict] = [
     {"profile_id": "00s-sound", "sort_order": 3, "tag_name": "00s-sound", "taxonomy_layer": "era",
      "description": "Sounds like 00s production — digital polish, loudness — "
                     "regardless of when it was released."},
-    {"profile_id": "modern", "sort_order": 4, "tag_name": "modern", "taxonomy_layer": "era",
+    # "modern-sound" (not the bare "modern") to match the -sound siblings and
+    # avoid colliding with the vague public "modern" folksonomy tag (2026-07-06).
+    {"profile_id": "modern-sound", "sort_order": 4, "tag_name": "modern-sound", "taxonomy_layer": "era",
      "description": "Sounds like now — current production aesthetics, no "
                     "period costume."},
 ]

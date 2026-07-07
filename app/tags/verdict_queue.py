@@ -119,7 +119,7 @@ def _era_prefill(year: int | None, raw_tags: list[dict]) -> str | None:
         if 2000 <= year <= 2009:
             return "00s-sound"
         if year >= 2010:
-            return "modern"
+            return "modern-sound"
         return None
     for tt in raw_tags:
         era = _DECADE_TAG_ERA.get((tt["tag"] or "").lower().strip())

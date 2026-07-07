@@ -120,6 +120,10 @@ LOCKED_TAG_HIDES: tuple[str, ...] = (
     "vocal",
     "ballad",
     "conscious",
+    # 2026-07-06: the bare "modern" is a vague folksonomy descriptor (like
+    # "electronic") that also collided with the era slot — now renamed
+    # "modern-sound", so hiding the raw tag no longer touches the era.
+    "modern",
 )
 
 # Tags PROMOTED into the profile vocabulary after the lock (Matthias-approved
