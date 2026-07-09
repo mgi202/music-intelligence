@@ -129,6 +129,56 @@ def test_existing_profiles_never_suggested(db):
     assert "house" not in {s["tag"] for s in res["new"]}
 
 
+def _promote_to_profile(conn, tag, layer="family"):
+    """Simulate a tag becoming a vocabulary profile out-of-band — the way
+    'jungle' was promoted to its own genre after its suggestion was seeded."""
+    conn.execute(
+        """INSERT INTO tag_profiles
+               (profile_id, tag_name, description, taxonomy_layer,
+                sort_order, origin, created_at, updated_at)
+           VALUES (?, ?, '', ?, 99, 'locked', '2026-01-01', '2026-01-01')""",
+        (tag, tag, layer),
+    )
+
+
+def test_approve_idempotent_when_tag_already_a_profile(db):
+    """Regression (jungle): a suggestion whose tag became a profile after it
+    was seeded must NOT collide on the profile primary key when approved.
+    That collision escaped as a 500 and left the row silently stuck."""
+    with db_conn(db) as conn:
+        _seed_family_tracks(conn, "techno", 150, extra_tag="acid techno")
+    vx.compute_suggestions(db)
+    sid = next(s for s in vx.list_suggestions("pending", db)
+               if s["tag"] == "acid techno")["suggestion_id"]
+    # Promote it out-of-band, then approve the now-stale suggestion.
+    with db_conn(db) as conn:
+        _promote_to_profile(conn, "acid techno", layer="family")
+    out = vx.approve_suggestion(sid, db)               # must not raise
+    assert out["status"] == "approved"
+    assert out.get("already_in_vocab") is True
+    with db_conn(db) as conn:                          # no duplicate profile
+        assert conn.execute(
+            "SELECT COUNT(*) FROM tag_profiles WHERE tag_name = 'acid techno'"
+        ).fetchone()[0] == 1
+    assert "acid techno" not in {s["tag"]
+                                 for s in vx.list_suggestions("pending", db)}
+
+
+def test_compute_self_heals_stale_pending_that_became_profile(db):
+    """A pending suggestion whose tag has since become a profile is retired by
+    the next scan (stale_resolved) instead of lingering un-approvable."""
+    with db_conn(db) as conn:
+        _seed_family_tracks(conn, "techno", 150, extra_tag="acid techno")
+    vx.compute_suggestions(db)
+    assert "acid techno" in {s["tag"] for s in vx.list_suggestions("pending", db)}
+    with db_conn(db) as conn:
+        _promote_to_profile(conn, "acid techno", layer="subgenre")
+    res = vx.compute_suggestions(db)
+    assert res["stale_resolved"] >= 1
+    assert "acid techno" not in {s["tag"]
+                                 for s in vx.list_suggestions("pending", db)}
+
+
 def test_reject_sticky_across_recompute(db):
     with db_conn(db) as conn:
         _seed_family_tracks(conn, "techno", 150, extra_tag="acid techno")

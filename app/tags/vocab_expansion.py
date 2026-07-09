@@ -36,9 +36,31 @@ reconcile — that migration path is unchanged.
 from __future__ import annotations
 
 import re
+import sqlite3
+import time
 from datetime import datetime, timezone
 
 from app.db.connection import db_conn
+
+
+def _retry_on_locked(fn, *args, attempts: int = 4, delay: float = 0.3, **kwargs):
+    """Retry a DB mutation that lost the race for the single WAL writer.
+
+    The 5s busy_timeout covers ordinary contention; this adds a few more
+    tries so a Tags-tab tap landing during a long worker write commits on a
+    retry instead of surfacing as a dead 500. Only 'database is locked' is
+    retried — ValueError/LookupError (bad id / already decided) propagate at
+    once. Each attempt opens a fresh transaction, so a rolled-back write is
+    replayed cleanly.
+    """
+    for attempt in range(attempts):
+        try:
+            return fn(*args, **kwargs)
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower() and attempt < attempts - 1:
+                time.sleep(delay)
+                continue
+            raise
 
 # ── Tunables ──────────────────────────────────────────────────────────────────
 
@@ -198,6 +220,26 @@ def compute_suggestions(db_path: str | None = None) -> dict:
             for r in conn.execute("SELECT tag, status FROM vocab_suggestions")
         }
 
+        # Self-heal: a pending suggestion whose tag has since become a
+        # vocabulary profile (e.g. jungle promoted to its own genre after the
+        # row was seeded) must leave the queue — approving it would collide on
+        # the profile's primary key and 500. Retire it silently; it is already
+        # in the vocabulary, so it is neither a fresh add nor a user reject.
+        existing_profiles = {
+            r["tag_name"].lower()
+            for r in conn.execute("SELECT tag_name FROM tag_profiles")
+        }
+        stale_resolved = 0
+        for tag, status in list(decided.items()):
+            if status == "pending" and tag in existing_profiles:
+                conn.execute(
+                    "UPDATE vocab_suggestions SET status = 'approved', "
+                    "decided_at = ?, updated_at = ? WHERE tag = ?",
+                    (now, now, tag),
+                )
+                decided[tag] = "approved"
+                stale_resolved += 1
+
         # Refresh counts on still-pending rows so the Tags tab shows live data.
         candidates = _candidate_counts(conn)
         by_tag = {c["tag"]: c for c in candidates}
@@ -250,6 +292,7 @@ def compute_suggestions(db_path: str | None = None) -> dict:
         "new": new,
         "pending_total": pending_total,
         "unassigned_skipped": unassigned_skipped,
+        "stale_resolved": stale_resolved,
     }
 
 
@@ -268,6 +311,11 @@ def list_suggestions(status: str = "pending", db_path: str | None = None) -> lis
 
 
 def approve_suggestion(suggestion_id: int, db_path: str | None = None) -> dict:
+    """Promote a suggestion into the vocabulary (lock-retried)."""
+    return _retry_on_locked(_approve_suggestion, suggestion_id, db_path)
+
+
+def _approve_suggestion(suggestion_id: int, db_path: str | None = None) -> dict:
     """Promote a suggestion into the vocabulary.
 
     Creates the subgenre profile with origin='user_approved' (reconcile
@@ -289,6 +337,25 @@ def approve_suggestion(suggestion_id: int, db_path: str | None = None) -> dict:
         tag = row["tag"]
         if row["was_alias_to"]:
             conn.execute("DELETE FROM tag_vocabulary WHERE tag = ?", (tag,))
+
+        # Idempotent when the tag is already in the vocabulary (promoted
+        # elsewhere — e.g. jungle became its own genre after this row was
+        # seeded). Inserting a second profile with the same primary key would
+        # raise IntegrityError → an unhandled 500 and a silently-stuck row.
+        # The alias fold (if any) is already cleared above; just resolve.
+        already = conn.execute(
+            "SELECT taxonomy_layer FROM tag_profiles WHERE tag_name = ?", (tag,)
+        ).fetchone()
+        if already:
+            conn.execute(
+                "UPDATE vocab_suggestions SET status = 'approved', "
+                "decided_at = ?, updated_at = ? WHERE suggestion_id = ?",
+                (now, now, suggestion_id),
+            )
+            return {"suggestion_id": suggestion_id, "tag": tag,
+                    "family": row["family"], "profile_id": tag,
+                    "status": "approved", "already_in_vocab": True,
+                    "existing_layer": already["taxonomy_layer"]}
 
         next_sort = conn.execute(
             "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM tag_profiles "
@@ -315,6 +382,11 @@ def approve_suggestion(suggestion_id: int, db_path: str | None = None) -> dict:
 
 
 def reject_suggestion(suggestion_id: int, db_path: str | None = None) -> dict:
+    """Sticky reject — the tag is never proposed again (lock-retried)."""
+    return _retry_on_locked(_reject_suggestion, suggestion_id, db_path)
+
+
+def _reject_suggestion(suggestion_id: int, db_path: str | None = None) -> dict:
     """Sticky reject — the tag is never proposed again. Raises ValueError on
     unknown id, LookupError when already decided."""
     now = datetime.now(timezone.utc).isoformat()
