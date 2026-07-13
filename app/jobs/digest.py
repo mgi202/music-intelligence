@@ -170,6 +170,34 @@ def assemble(db_path: str | None = None, now_utc: datetime | None = None) -> tup
     except Exception:  # noqa: BLE001
         pass
 
+    # ── Audio pipeline (Phase 3 — only shown once something moved) ──
+    try:
+        with db_conn(db_path) as conn:
+            cands = conn.execute(
+                "SELECT COUNT(*) FROM audio_source_candidates WHERE created_at >= ?",
+                (window_start,),
+            ).fetchone()[0]
+            enriched = conn.execute(
+                "SELECT COUNT(*) FROM audio_features WHERE processed_at >= ?",
+                (window_start,),
+            ).fetchone()[0]
+            auto = conn.execute(
+                "SELECT COUNT(*) FROM classification_results "
+                "WHERE created_at >= ? AND status = 'auto_applied'",
+                (window_start,),
+            ).fetchone()[0]
+            queued = conn.execute(
+                "SELECT COUNT(*) FROM classification_results "
+                "WHERE status = 'review_required'",
+            ).fetchone()[0]
+        if cands or enriched or auto or queued:
+            lines.append(
+                f"Audio: {cands} sources found · {enriched} enriched · "
+                f"{auto} auto-tagged · {queued} awaiting review"
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
     # ── Stage failures overnight ──
     try:
         failures = runs.get_detail("stage_failures", db_path).get("failures", [])

@@ -1,0 +1,26 @@
+# Music Intelligence System — Mac compute node ONLY (Phase 3 "Ears").
+#
+# Install into a dedicated venv on the Mac, NEVER into the server image, CI,
+# or requirements.txt. The Mac node downloads lawful audio to a temp file,
+# extracts features (Essentia), key (KeyFinder), and a 512-dim CLAP embedding,
+# posts the results to the VPS over Tailscale, and deletes the audio.
+#
+#   python3 -m venv ~/.mis-compute-venv
+#   ~/.mis-compute-venv/bin/pip install -r requirements-compute.txt
+#   see compute_node/README.md for the run command
+#
+# Notes:
+# - essentia has no official macOS arm64 wheels on PyPI. On Apple Silicon
+#   install it via Homebrew (`brew install essentia`) and let the agent find
+#   it, or use the librosa fallback the agent ships with (it degrades
+#   gracefully per-extractor and reports which backends ran).
+# - keyfinder-cli (`brew install libkeyfinder` + keyfinder-cli) is preferred
+#   for Camelot keys; the agent falls back to Essentia/librosa key detection.
+
+requests>=2.32
+yt-dlp>=2025.1.15
+numpy
+soundfile
+librosa>=0.10        # decoding + feature fallbacks
+laion-clap>=1.1.6    # pulls torch + torchaudio
+# essentia            # uncomment on Linux/x86; on macOS prefer `brew install essentia`

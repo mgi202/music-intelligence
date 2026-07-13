@@ -489,3 +489,8 @@
                      border-radius: 6px; padding: 3px 8px; font-size: 12px; max-width: 180px; }
   .vq-strip .spacer { flex: 1; }
   .vq-strip .laterlink { color: var(--accent); cursor: pointer; }
+
+  /* ── Phase 3 (Ears): Training labelling drill-down + classification queue ── */
+  .pcard.trainable { cursor: pointer; transition: border-color .15s; }
+  .pcard.trainable:hover { border-color: var(--accent); }
+  .trainrow .title .pill { margin-left: 6px; }

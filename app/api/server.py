@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -1738,6 +1738,249 @@ def health():
         return {"ok": True}
     finally:
         conn.close()
+
+
+# ─────────────────────────────────────────
+# Phase 3 (Ears) — compute-node job API.
+# Tailnet-only like everything else, PLUS a shared-secret header
+# (X-Audio-Node-Token vs .env AUDIO_NODE_TOKEN) so a stray tailnet device
+# can't claim work or post features. With the token unset the endpoints
+# refuse (503) rather than running open.
+# ─────────────────────────────────────────
+
+class AudioClaimRequest(BaseModel):
+    batch: int = Field(4, ge=1, le=32)
+    reprocess: bool = False   # stale-vector reprocess mode (explicit, never automatic)
+
+
+class AudioResultRequest(BaseModel):
+    candidate_id: int
+    status: str = "ok"                       # 'ok' | 'failed'
+    error: Optional[str] = None
+    features: Optional[dict] = None
+    camelot_key: Optional[str] = None
+    clap_vector: Optional[list[float]] = None
+    model_versions: Optional[dict] = None
+
+
+class PromptEmbeddingsRequest(BaseModel):
+    model_version: Optional[str] = None
+    embeddings: list[dict] = Field(default_factory=list)
+
+
+def _require_node_token(x_audio_node_token: Optional[str]):
+    from app.audio.node_api import check_token
+    ok, status, msg = check_token(x_audio_node_token)
+    if not ok:
+        raise HTTPException(status, msg)
+
+
+@app.post("/api/audio/claim")
+def audio_claim(body: AudioClaimRequest,
+                x_audio_node_token: Optional[str] = Header(None)):
+    """Atomically claim up to N lawful extraction jobs for the Mac node.
+    The claim query itself filters lawful_basis != 'unknown' — an unlawful
+    candidate can never be handed out."""
+    _require_node_token(x_audio_node_token)
+    from app.audio.node_api import claim_jobs
+    return {"jobs": claim_jobs(batch=body.batch, reprocess=body.reprocess)}
+
+
+@app.post("/api/audio/result")
+def audio_result(body: AudioResultRequest,
+                 x_audio_node_token: Optional[str] = Header(None)):
+    """Ingest one extraction result: audio_features (+ raw vector JSON),
+    enrichment_state flags, Qdrant point, match_status transition."""
+    _require_node_token(x_audio_node_token)
+    from app.audio.node_api import submit_result
+    try:
+        return submit_result(body.model_dump())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/audio/prompts")
+def audio_prompts(x_audio_node_token: Optional[str] = Header(None)):
+    """Profiles with CLAP prompts — the Mac embeds these texts."""
+    _require_node_token(x_audio_node_token)
+    from app.audio.node_api import list_prompts
+    return {"profiles": list_prompts()}
+
+
+@app.post("/api/audio/prompt-embeddings")
+def audio_prompt_embeddings(body: PromptEmbeddingsRequest,
+                            x_audio_node_token: Optional[str] = Header(None)):
+    """Store the Mac-computed CLAP text embeddings (vector_query_profiles)."""
+    _require_node_token(x_audio_node_token)
+    from app.audio.node_api import store_prompt_embeddings
+    try:
+        return store_prompt_embeddings(body.model_dump())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/audio/status")
+def audio_status():
+    """Phase 3 progress readout for the FE: pipeline counts + enrichment."""
+    conn = get_connection()
+    try:
+        by_status = {
+            r["match_status"]: r["n"] for r in conn.execute(
+                """SELECT match_status, COUNT(*) AS n FROM tracks
+                   WHERE match_status IN ('source_discovery_queued',
+                       'lawful_audio_candidate', 'weak_audio_candidate',
+                       'audio_enriched', 'private_classified',
+                       'no_audio_source', 'feature_failed', 'vector_failed')
+                   GROUP BY match_status""").fetchall()
+        }
+        enriched = conn.execute(
+            "SELECT COUNT(*) FROM audio_features").fetchone()[0]
+        vectors_stored = conn.execute(
+            "SELECT COUNT(*) FROM audio_features WHERE clap_vector_json IS NOT NULL"
+        ).fetchone()[0]
+        stale = conn.execute(
+            "SELECT COUNT(*) FROM audio_features WHERE feature_model_status = 'stale'"
+        ).fetchone()[0]
+        review = conn.execute(
+            "SELECT COUNT(*) FROM classification_results WHERE status = 'review_required'"
+        ).fetchone()[0]
+        return {"by_status": by_status, "features": enriched,
+                "vectors": vectors_stored, "stale": stale,
+                "classification_review": review}
+    finally:
+        conn.close()
+
+
+@app.get("/api/tracks/{track_pk}/similar")
+def similar_tracks(track_pk: str, limit: int = Query(20, ge=1, le=50)):
+    """'Sounds like this' — Qdrant kNN over audio-enriched tracks. 409 when
+    the track has no vector yet (metadata-only tracks aren't in the store —
+    audio boosts, never gates, so this surface is simply unavailable)."""
+    from app.audio import vectors
+    vec = vectors.load_vector(track_pk)
+    if vec is None:
+        raise HTTPException(409, "Track has no CLAP vector yet")
+    try:
+        hits = vectors.search_similar(vec, limit=limit, exclude_track_pk=track_pk)
+    except vectors.VectorStoreError as e:
+        raise HTTPException(503, f"vector store unavailable: {e}")
+    return {"track_pk": track_pk, "similar": hits}
+
+
+# ─────────────────────────────────────────
+# Phase 3 — classification match-review queue
+# ─────────────────────────────────────────
+
+@app.get("/api/classifications")
+def classifications(limit: int = Query(100, ge=1, le=500)):
+    """The kNN match-review queue (status='review_required'), best-first,
+    with the per-signal evidence the Why panel renders."""
+    from app.tags.knn_classifier import list_review_queue
+    return {"results": list_review_queue(limit=limit)}
+
+
+@app.post("/api/classifications/{result_id}/accept")
+def accept_classification(result_id: int):
+    """Accept → private_model tag + status manual_override."""
+    from app.tags.knn_classifier import accept_result
+    try:
+        return accept_result(result_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/classifications/{result_id}/reject")
+def reject_classification(result_id: int):
+    """Reject → sticky near_miss exemplar (hard-negative training signal) +
+    status rejected; any tag the classifier wrote is retracted."""
+    from app.tags.knn_classifier import reject_result
+    try:
+        return reject_result(result_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+# ─────────────────────────────────────────
+# Phase 3 — reference labelling (Training tab fast path to 15+15)
+# ─────────────────────────────────────────
+
+class ReferenceLabelRequest(BaseModel):
+    track_pk: str
+    profile_id: str
+    label_type: str   # positive | negative | near_miss
+
+
+@app.get("/api/reference/candidates")
+def reference_candidates(profile_id: str, limit: int = Query(30, ge=1, le=100)):
+    """Unlabelled candidates for a profile, ordered by training value:
+    context-term/tag matches first (likely positives), then rated tracks,
+    newest first. Committed-away tracks and existing exemplars are excluded."""
+    conn = get_connection()
+    try:
+        prof = conn.execute(
+            "SELECT profile_id, tag_name, context_terms_json FROM tag_profiles "
+            "WHERE profile_id = ?", (profile_id,),
+        ).fetchone()
+        if prof is None:
+            raise HTTPException(404, "Profile not found")
+        terms = [prof["tag_name"].lower()]
+        if prof["context_terms_json"]:
+            try:
+                terms += [t.lower() for t in json.loads(prof["context_terms_json"])]
+            except (TypeError, ValueError):
+                pass
+        placeholders = ",".join("?" * len(terms))
+        rows = conn.execute(
+            f"""SELECT t.track_pk, t.canonical_title, t.canonical_artist,
+                       t.personal_rating, t.ytm_track_id, t.playback_video_id,
+                       EXISTS (SELECT 1 FROM effective_track_tags e
+                               WHERE e.track_pk = t.track_pk
+                                 AND e.tag IN ({placeholders})) AS tag_match,
+                       EXISTS (SELECT 1 FROM audio_features af
+                               WHERE af.track_pk = t.track_pk
+                                 AND af.clap_vector_json IS NOT NULL) AS has_vector
+                FROM tracks t
+                WHERE t.missing_since IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM reference_track_labels r
+                                  WHERE r.track_pk = t.track_pk
+                                    AND r.profile_id = ?)
+                ORDER BY tag_match DESC,
+                         (t.personal_rating IS NULL) ASC,
+                         t.personal_rating DESC,
+                         has_vector DESC,
+                         t.created_at DESC
+                LIMIT ?""",
+            (*terms, profile_id, limit),
+        ).fetchall()
+        return {"profile_id": profile_id, "tag_name": prof["tag_name"],
+                "candidates": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.post("/api/reference/label")
+def add_reference_label_api(body: ReferenceLabelRequest):
+    """One-tap exemplar label from the Training screen (created_by='manual' —
+    the reconcile sweep never touches it)."""
+    from app.tags import reference_manager
+    try:
+        created = reference_manager.add_reference_label(
+            body.track_pk, body.profile_id, body.label_type,
+            reference_source="manual", created_by="manual",
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"created": created, **body.model_dump()}
+
+
+@app.delete("/api/reference/label")
+def remove_reference_label_api(track_pk: str, profile_id: str,
+                               label_type: Optional[str] = None):
+    """Undo a labelling tap."""
+    from app.tags import reference_manager
+    removed = reference_manager.remove_reference_label(
+        track_pk, profile_id, label_type)
+    return {"removed": removed}
 
 
 # ─────────────────────────────────────────

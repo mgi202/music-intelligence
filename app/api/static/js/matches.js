@@ -1,18 +1,69 @@
-// ── Matches: sub-tabs (Duplicates / Removed) — the dedup/match review queue ──
+// ── Matches: sub-tabs (Duplicates / Suggested tags / Removed) ──
 async function loadMatches() {
   state.reviewPairs = await api("/api/dedup").catch(() => []);
+  state.classifQueue = (await api("/api/classifications").catch(() => ({ results: [] }))).results || [];
   const badge = $("matchesbadge");
-  if (state.reviewPairs.length) { badge.textContent = state.reviewPairs.length; badge.style.display = ""; }
+  const total = state.reviewPairs.length + state.classifQueue.length;
+  if (total) { badge.textContent = total; badge.style.display = ""; }
   else badge.style.display = "none";
   const sub = state.matchesSub || "duplicates";
   $("matches").innerHTML = `<nav class="subtabs">
       <button id="sub-dup" class="${sub === "duplicates" ? "active" : ""}">Duplicates${state.reviewPairs.length ? ` <span class="badge">${state.reviewPairs.length}</span>` : ""}</button>
+      <button id="sub-cls" class="${sub === "classif" ? "active" : ""}">Suggested tags${state.classifQueue.length ? ` <span class="badge">${state.classifQueue.length}</span>` : ""}</button>
       <button id="sub-rem" class="${sub === "removed" ? "active" : ""}">Removed</button>
     </nav><div id="subcontent"></div>`;
   $("sub-dup").onclick = () => { state.matchesSub = "duplicates"; loadMatches(); };
+  $("sub-cls").onclick = () => { state.matchesSub = "classif"; loadMatches(); };
   $("sub-rem").onclick = () => { state.matchesSub = "removed"; loadMatches(); };
   if (sub === "duplicates") renderDuplicates();
+  else if (sub === "classif") renderClassifications();
   else loadRemoved();
+}
+
+// ── kNN classification review queue (Phase 3): "the model thinks this track
+// is X — is it?" Accept writes a private_model tag; Reject records a sticky
+// near-miss (exactly the hard-negative training signal the classifier wants).
+function renderClassifications() {
+  const rows = state.classifQueue || [];
+  const sigbar = (label, v) => v == null ? "" :
+    `<div class="plabel" style="font-size:11px"><span>${label}</span><span>${Math.round(v * 100)}%</span></div>
+     <div class="ptrack"><div class="pfill" style="width:${Math.round(v * 100)}%"></div></div>`;
+  $("subcontent").innerHTML = rows.length
+    ? `<div class="stats">The classifier heard these tracks as a profile it knows — confirm or reject. Rejecting also teaches it ("sounds like, but isn't").</div>`
+      + rows.map(r => {
+        const s = (r.evidence || {}).signals || {};
+        const vid = r.playback_video_id || r.ytm_track_id;
+        return `<div class="pl" id="cls-${r.id}">
+          <div class="name">${esc(r.canonical_title)} <span class="sub">${esc(r.canonical_artist)}</span></div>
+          <div class="sub">sounds like <b style="color:#6fb6d6">${esc(r.tag)}</b> · confidence ${Math.round(r.confidence * 100)}%</div>
+          <details style="margin:6px 0"><summary class="sub" style="cursor:pointer">Why?</summary>
+            <div style="max-width:360px;margin-top:6px">
+              ${sigbar("Similar reference tracks", s.knn_similarity_score)}
+              ${sigbar("Margin vs counter-examples", s.knn_margin_score)}
+              ${sigbar("Reference diversity", s.reference_diversity_score)}
+              ${sigbar("Prompt match (CLAP)", s.clap_prompt_score)}
+              ${sigbar("BPM/energy fit", s.profile_feature_fit_score)}
+              ${sigbar("Context agreement", s.context_alignment_score)}
+            </div></details>
+          <div class="actions">
+            ${vid ? `<button onclick="play('${jsarg(vid)}', '${jsarg(r.canonical_title)}', '${jsarg(r.track_pk)}')">▶ Listen</button>` : ""}
+            <button class="primary" onclick="decideClassification(${r.id}, 'accept')">✓ It is ${esc(r.tag)}</button>
+            <button onclick="decideClassification(${r.id}, 'reject')">✕ It isn't</button>
+          </div>
+        </div>`;
+      }).join("")
+    : '<div class="empty">No tag suggestions awaiting review. They appear once the nightly classifier runs on audio-enriched tracks.</div>';
+}
+
+async function decideClassification(id, action) {
+  try {
+    const r = await api(`/api/classifications/${id}/${action}`, { method: "POST", body: "{}" });
+    toast(action === "accept" ? `Tagged “${r.tag}” ✓` : "Rejected — the model learns from this");
+  } catch (e) { toast(e.message || "Couldn't save"); }
+  state.classifQueue = (state.classifQueue || []).filter(x => x.id !== id);
+  const el = $("cls-" + id);
+  if (el) el.remove();
+  if (!(state.classifQueue || []).length) loadMatches();
 }
 
 function renderDuplicates() {

@@ -24,6 +24,8 @@ services:
     environment:
       - SQLITE_PATH=/data/library.db
       - YTM_OAUTH_FILE=/config/oauth.json
+      # Compose-internal hostname of the vector store (Phase 3).
+      - QDRANT_URL=http://qdrant:6333
     volumes:
       - mis-data:/data
       - ./oauth.json:/config/oauth.json
@@ -40,9 +42,24 @@ services:
       # Interpolated from .env at compose time (falls back to 360). A literal
       # value here would override env_file and make .env edits silently no-ops.
       - WORKER_INTERVAL_MINUTES=${WORKER_INTERVAL_MINUTES:-360}
+      # Compose-internal hostname of the vector store (Phase 3).
+      - QDRANT_URL=http://qdrant:6333
     volumes:
       - mis-data:/data
       - ./oauth.json:/config/oauth.json
+
+  # Phase 3 (Ears) — Qdrant vector store for 512-dim CLAP track embeddings.
+  # No published ports: reachable only on the compose-internal network as
+  # http://qdrant:6333 (api/worker). Treated as REBUILDABLE — the raw vectors
+  # live in SQLite (audio_features.clap_vector_json, Litestream-backed);
+  # scripts/reindex_qdrant.py repopulates the collection from them. The
+  # qdrant volume is deliberately NOT in any backup path.
+  qdrant:
+    image: qdrant/qdrant:v1.15.1
+    container_name: mis-qdrant
+    restart: unless-stopped
+    volumes:
+      - mis-qdrant:/qdrant/storage
 
   # Off-site DB replication to Backblaze B2 (RC1 §S11). ACTIVE — deployed to
   # music-intel-prod 2026-06-25, verified replicating to bucket
@@ -63,3 +80,4 @@ services:
 
 volumes:
   mis-data:
+  mis-qdrant:

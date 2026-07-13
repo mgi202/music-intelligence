@@ -145,6 +145,23 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE metrics_snapshots ADD COLUMN pass_type TEXT")
         print("Migration applied: metrics_snapshots.pass_type")
 
+    # 2026-07-13 (Phase 3 — Ears): lawful audio-source discovery stamp on
+    # enrichment_state (misses retried after AUDIO_DISCOVERY_RETRY_DAYS).
+    if es_cols and "audio_source_checked_at" not in es_cols:
+        conn.execute("ALTER TABLE enrichment_state ADD COLUMN audio_source_checked_at TEXT")
+        print("Migration applied: enrichment_state.audio_source_checked_at")
+
+    # 2026-07-13 (Phase 3 — Ears): compute-node claim lease on candidates +
+    # rebuildable CLAP vector storage on audio_features.
+    asc_cols = {row["name"] for row in conn.execute("PRAGMA table_info(audio_source_candidates)")}
+    if asc_cols and "claimed_at" not in asc_cols:
+        conn.execute("ALTER TABLE audio_source_candidates ADD COLUMN claimed_at TEXT")
+        print("Migration applied: audio_source_candidates.claimed_at")
+    af_cols = {row["name"] for row in conn.execute("PRAGMA table_info(audio_features)")}
+    if af_cols and "clap_vector_json" not in af_cols:
+        conn.execute("ALTER TABLE audio_features ADD COLUMN clap_vector_json TEXT")
+        print("Migration applied: audio_features.clap_vector_json")
+
     # 2026-07-03 (review refinement): display order for tag-profile chips —
     # functional chips render in set order, not alphabetically. Values are
     # (re)stamped by reconcile_tag_profiles on every init.
@@ -440,6 +457,20 @@ def _run_backfills(conn: sqlite3.Connection, db_path: str | None = None) -> None
             print(f"WARNING: alias cycles left untouched: {vsummary['cycles']}")
     except Exception as e:  # never block init on curation seed
         print(f"tag_vocabulary reconcile skipped: {e}")
+
+    # 2026-07-13 (Phase 3 — Ears): seed CLAP prompts + feature ranges for the
+    # profiles classified first. Fills NULL columns only — hand-tuned values
+    # are never overwritten. Idempotent; a no-op once seeded.
+    try:
+        from app.audio.prompt_seed import seed_profile_prompts
+        ps = seed_profile_prompts(db_path)
+        if ps["profiles_touched"]:
+            print(
+                f"Seeded profile prompts: {ps['profiles_touched']} profiles, "
+                f"{ps['columns_set']} columns"
+            )
+    except Exception as e:  # never block init on prompt seed
+        print(f"profile prompt seed skipped: {e}")
 
     rows = conn.execute(
         "SELECT track_pk, ytm_track_id, isrc FROM tracks "

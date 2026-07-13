@@ -21,3 +21,9 @@ tqdm==4.66.5          # Progress bars for long ingestion runs
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 httpx==0.28.1         # required by fastapi.testclient.TestClient (used in tests)
+
+# Phase 3 (Ears) — vector store client only. The heavy ML stack (torch,
+# Essentia, KeyFinder, CLAP) lives EXCLUSIVELY on the Mac compute node
+# (requirements-compute.txt) and must never be added here: it would bloat
+# the server image and break CI's clean install.
+qdrant-client==1.15.1

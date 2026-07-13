@@ -111,6 +111,10 @@ CREATE TABLE IF NOT EXISTS audio_source_candidates (
     rejected                INTEGER DEFAULT 0,
     rejection_reason        TEXT,
     last_checked_at         TEXT,
+    -- Phase 3 (2026-07-13): compute-node lease. Stamped when the Mac node
+    -- claims this candidate for extraction; a claim older than
+    -- AUDIO_CLAIM_LEASE_MINUTES is considered dead and re-claimable.
+    claimed_at              TEXT,
     created_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (track_pk) REFERENCES tracks(track_pk) ON DELETE CASCADE
@@ -211,6 +215,10 @@ CREATE TABLE IF NOT EXISTS audio_features (
         CHECK (feature_model_status IN ('current', 'stale', 'deprecated', 'failed_reprocess')),
     stale_reason            TEXT,
     stale_marked_at         TEXT,
+    -- Phase 3 (2026-07-13): the raw 512-dim CLAP vector as JSON. Kept in
+    -- SQLite so Qdrant is always rebuildable (scripts/reindex_qdrant.py)
+    -- without re-downloading any audio. Litestream backs this up with the DB.
+    clap_vector_json        TEXT,
     processed_at            TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (track_pk) REFERENCES tracks(track_pk) ON DELETE CASCADE,
     FOREIGN KEY (source_candidate_id) REFERENCES audio_source_candidates(candidate_id)
@@ -371,6 +379,10 @@ CREATE TABLE IF NOT EXISTS enrichment_state (
     -- searched this track, hit or miss, so the sweep never rescans it. The
     -- on-demand dialog search (force) ignores the stamp.
     video_searched_at           TEXT,
+    -- Lawful audio-source discovery (Phase 3, 2026-07-13): stamped after the
+    -- discovery stage evaluated this track, hit or miss, so it isn't re-searched
+    -- every pass. Misses are retried after AUDIO_DISCOVERY_RETRY_DAYS.
+    audio_source_checked_at     TEXT,
     metadata_confidence         REAL DEFAULT 0.0,
     audio_source_confidence     REAL DEFAULT 0.0,
     enrichment_tier             TEXT NOT NULL DEFAULT 'metadata_only' CHECK (enrichment_tier IN (

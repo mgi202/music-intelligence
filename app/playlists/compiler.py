@@ -18,11 +18,14 @@ rule_json schema (from spec Section 17):
     }
 }
 
-Ranking modes (Stage 0 — audio signals are neutral for all tracks):
-  mood     — tags match score (40%), recency proxy (20%), novelty (40% neutral)
-  discovery — novelty/recency signals
-  utility  — deterministic: created_at DESC
-  dj_mix   — falls back to mood in Stage 0 (no BPM/key data)
+Ranking modes (Phase 3 — audio features BOOST ranking; they never gate
+eligibility. Every audio component null-guards to a neutral 0.5, so a
+metadata-only track always ranks and can never be dropped for lacking audio):
+  mood      — tag richness, recency, rating + a small audio-fit nudge
+  discovery — novelty/recency + a small audio-fit nudge
+  utility   — deterministic: created_at DESC
+  dj_mix    — real signal once audio_features exist:
+              BPM 30% / Camelot 20% / energy curve 20% / tags 20% / vector 10%
 """
 
 from __future__ import annotations
@@ -76,8 +79,10 @@ def compile_playlist_detailed(rule_id: str, db_path: str | None = None) -> list[
             ranked = _rank_utility(eligible, rule_json)
         elif ranking_mode == "discovery":
             ranked = _rank_discovery(eligible, conn)
-        else:  # mood (default) and dj_mix (Stage 0 fallback to mood)
-            ranked = _rank_mood(eligible, conn)
+        elif ranking_mode == "dj_mix":
+            ranked = _rank_dj_mix(eligible, conn, rule_json)
+        else:  # mood (default)
+            ranked = _rank_mood(eligible, conn, rule_json)
 
         if max_tracks:
             ranked = ranked[:max_tracks]
@@ -287,19 +292,162 @@ def _rank_utility(
     return out
 
 
+def _load_audio_features(
+    conn: sqlite3.Connection, pks: list[str]
+) -> dict[str, dict]:
+    """audio_features rows for the given tracks. Missing rows simply aren't
+    in the dict — callers must treat that as NEUTRAL, never as exclusion."""
+    if not pks:
+        return {}
+    placeholders = ",".join("?" * len(pks))
+    return {
+        r["track_pk"]: dict(r)
+        for r in conn.execute(
+            f"""SELECT track_pk, bpm, camelot_key, energy, valence, danceability
+                FROM audio_features WHERE track_pk IN ({placeholders})""",
+            pks,
+        ).fetchall()
+    }
+
+
+def _range_score(value: float | None, lo, hi) -> float:
+    """Fit of a feature value to an audio_boosts range. NEUTRAL (0.5) when the
+    track has no value or the rule sets no range — audio boosts, never gates."""
+    if value is None or (lo is None and hi is None):
+        return 0.5
+    lo = float(lo) if lo is not None else float("-inf")
+    hi = float(hi) if hi is not None else float("inf")
+    if lo <= value <= hi:
+        return 1.0
+    span = (hi - lo) if (hi > lo and hi != float("inf") and lo != float("-inf")) \
+        else max(abs(value), 1.0)
+    dist = (lo - value) if value < lo else (value - hi)
+    return max(0.0, 1.0 - dist / max(span, 1e-9))
+
+
+def _camelot_compat(key_a: str | None, key_b: str | None) -> float:
+    """Harmonic-mixing compatibility of two Camelot keys. Neutral without data."""
+    if not key_a or not key_b:
+        return 0.5
+    try:
+        num_a, let_a = int(key_a[:-1]), key_a[-1].upper()
+        num_b, let_b = int(key_b[:-1]), key_b[-1].upper()
+    except (ValueError, IndexError):
+        return 0.5
+    if key_a.upper() == key_b.upper():
+        return 1.0
+    if let_a == let_b and (abs(num_a - num_b) in (1, 11)):
+        return 0.85   # adjacent on the wheel
+    if num_a == num_b:
+        return 0.8    # relative major/minor
+    return 0.3
+
+
+def _rule_profile_embedding(conn: sqlite3.Connection, rule_json: dict) -> list | None:
+    """The CLAP positive-prompt embedding of the first tags_any profile that
+    has one — the vector component's query. None when nothing applies."""
+    import json as _json
+    tags = (rule_json.get("eligibility") or {}).get("tags_any") or []
+    for tag in tags:
+        row = conn.execute(
+            """SELECT v.embedding_json FROM vector_query_profiles v
+               JOIN tag_profiles p ON v.profile_id = p.profile_id || '::positive'
+               WHERE LOWER(p.tag_name) = LOWER(?)""",
+            (tag,),
+        ).fetchone()
+        if row and row["embedding_json"]:
+            try:
+                vec = _json.loads(row["embedding_json"])
+                if isinstance(vec, list):
+                    return vec
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _rank_dj_mix(
+    tracks: list[sqlite3.Row],
+    conn: sqlite3.Connection,
+    rule_json: dict,
+) -> list[tuple]:
+    """dj_mix (Phase 3): BPM 30% / Camelot 20% / energy 20% / tags 20% /
+    vector 10%. Every audio term is null-guarded to neutral — a metadata-only
+    track scores mid-field, it is NEVER dropped."""
+    pks = [r["track_pk"] for r in tracks]
+    if not pks:
+        return []
+    feats = _load_audio_features(conn, pks)
+    boosts = rule_json.get("audio_boosts") or {}
+
+    placeholders = ",".join("?" * len(pks))
+    tag_counts = {
+        row["track_pk"]: row["tag_count"]
+        for row in conn.execute(
+            f"""SELECT track_pk, COUNT(*) as tag_count FROM track_tags
+                WHERE track_pk IN ({placeholders}) GROUP BY track_pk""",
+            pks,
+        ).fetchall()
+    }
+
+    # Anchor key: the most common Camelot key among the eligible set — the
+    # set's tonal centre of gravity. Tracks without a key stay neutral.
+    key_counts: dict[str, int] = {}
+    for f in feats.values():
+        if f.get("camelot_key"):
+            k = f["camelot_key"].upper()
+            key_counts[k] = key_counts.get(k, 0) + 1
+    anchor_key = max(key_counts, key=key_counts.get) if key_counts else None
+
+    query_vec = _rule_profile_embedding(conn, rule_json)
+    vec_sims: dict[str, float] = {}
+    if query_vec is not None and feats:
+        import json as _json
+        from app.audio.vectors import cosine as _cosine
+        f_pks = list(feats)
+        f_ph = ",".join("?" * len(f_pks))
+        for r in conn.execute(
+            f"""SELECT track_pk, clap_vector_json FROM audio_features
+                WHERE track_pk IN ({f_ph}) AND clap_vector_json IS NOT NULL""",
+            f_pks,
+        ).fetchall():
+            try:
+                tvec = _json.loads(r["clap_vector_json"])
+            except (TypeError, ValueError):
+                continue
+            if isinstance(tvec, list) and len(tvec) == len(query_vec):
+                vec_sims[r["track_pk"]] = max(
+                    0.0, min(1.0, 0.5 + 0.5 * _cosine(tvec, query_vec)))
+
+    def components(row: sqlite3.Row) -> dict:
+        f = feats.get(row["track_pk"], {})
+        bpm_score = _range_score(f.get("bpm"),
+                                 boosts.get("bpm_min"), boosts.get("bpm_max"))
+        key_score = _camelot_compat(f.get("camelot_key"), anchor_key)
+        energy_score = _range_score(f.get("energy"),
+                                    boosts.get("energy_min"), boosts.get("energy_max"))
+        tag_score = min(1.0, tag_counts.get(row["track_pk"], 0) / 20.0)
+        vector_score = vec_sims.get(row["track_pk"], 0.5)
+        return {
+            "bpm": 0.30 * bpm_score,
+            "camelot": 0.20 * key_score,
+            "energy": 0.20 * energy_score,
+            "tags": 0.20 * tag_score,
+            "vector": 0.10 * vector_score,
+        }
+
+    scored = [(row, sum(c.values()), c) for row in tracks for c in (components(row),)]
+    return sorted(scored, key=lambda t: t[1], reverse=True)
+
+
 def _rank_mood(
     tracks: list[sqlite3.Row],
     conn: sqlite3.Connection,
+    rule_json: dict | None = None,
 ) -> list[tuple]:
     """
-    Mood mode Stage 0: rank by tag count (proxy for tag richness) + recency.
-
-    In Stage 0 without audio features, we rank by:
-      - Tag richness (how many tags the track has) — proxy for enrichment quality
-      - Recency (created_at)
-
-    When audio features arrive in Stage 1, this will incorporate vector similarity
-    and BPM/energy signals.
+    Mood mode: tag richness + recency + rating, plus a small audio-fit nudge
+    (Phase 3). The audio term is neutral (0.5) for metadata-only tracks —
+    audio boosts ranking, it never gates eligibility.
     """
     pks = [r["track_pk"] for r in tracks]
     if not pks:
@@ -315,6 +463,8 @@ def _rank_mood(
             GROUP BY track_pk
         """, pks).fetchall()
     }
+    feats = _load_audio_features(conn, pks)
+    boosts = (rule_json or {}).get("audio_boosts") or {}
 
     def mood_components(row: sqlite3.Row) -> dict:
         tag_richness = min(1.0, tag_counts.get(row["track_pk"], 0) / 20.0)  # normalise on 20 tags
@@ -332,11 +482,18 @@ def _rank_mood(
         # Personal rating boost: highest-trust signal. Unrated = neutral (0.5).
         rating = row["personal_rating"]
         rating_score = 0.5 if rating is None else rating / 4.0
+        # Audio-fit nudge (Phase 3): energy/bpm within the rule's boost ranges.
+        f = feats.get(row["track_pk"], {})
+        audio_fit = (
+            _range_score(f.get("energy"), boosts.get("energy_min"), boosts.get("energy_max"))
+            + _range_score(f.get("bpm"), boosts.get("bpm_min"), boosts.get("bpm_max"))
+        ) / 2.0
         # Weighted contributions (sum to the final score).
         return {
-            "tag_richness": 0.45 * tag_richness,
-            "recency": 0.25 * recency,
-            "rating": 0.30 * rating_score,
+            "tag_richness": 0.40 * tag_richness,
+            "recency": 0.22 * recency,
+            "rating": 0.28 * rating_score,
+            "audio_fit": 0.10 * audio_fit,
         }
 
     scored = [(row, sum(c.values()), c) for row in tracks for c in (mood_components(row),)]

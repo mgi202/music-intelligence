@@ -25,7 +25,7 @@ async function loadTraining() {
     const pill = p.ready
       ? '<span class="pill ready">✓ ready</span>'
       : `<span class="pill wip">in progress</span>`;
-    return `<div class="pcard">
+    return `<div class="pcard trainable" onclick="trainProfile('${jsarg(p.profile_id)}')" title="tap to label examples for this profile">
       <div class="ptop"><span class="pname">${esc(p.profile_id)}</span>${pill}</div>
       ${bar("Positives", p.positive, 15)}
       ${bar("Negatives + near-miss", p.negative_plus_near_miss, 15)}
@@ -34,9 +34,66 @@ async function loadTraining() {
   }).join("");
 
   const intro = anyData
-    ? `<b>${ready}</b> of ${profiles.length} profiles ready to auto-classify.`
-    : `No examples yet. Open a track, hit <b>+ tag</b>, and tap a profile chip — these bars fill in as you go. Each profile needs 15 positives, 15 negatives/near-misses, and 3 different artists.`;
+    ? `<b>${ready}</b> of ${profiles.length} profiles ready to auto-classify. Tap a profile to label examples directly — the fast path to 15+15.`
+    : `No examples yet. Tap a profile below to start labelling examples directly, or tag tracks in Review — these bars fill in as you go. Each profile needs 15 positives, 15 negatives/near-misses, and 3 different artists.`;
   el.innerHTML = `<div class="trainhead">${intro}</div>${cards}`;
+}
+
+// ── Reference labelling drill-down (Phase 3): one-tap positive / negative /
+// near-miss on served candidates — the 10× path to unlocking auto-apply. ──
+async function trainProfile(pid) {
+  const el = $("training");
+  el.innerHTML = '<div class="trainhead">Loading candidates…</div>';
+  let data, readiness;
+  try {
+    [data, readiness] = await Promise.all([
+      api(`/api/reference/candidates?profile_id=${encodeURIComponent(pid)}&limit=30`),
+      api("/api/reference/readiness"),
+    ]);
+  } catch (e) { el.innerHTML = '<div class="empty">Couldn\'t load candidates.</div>'; return; }
+  const r = (readiness.profiles || []).find(x => x.profile_id === pid) || {};
+  state.trainCands = data.candidates || [];
+
+  const row = (t) => {
+    const vid = t.playback_video_id || t.ytm_track_id;
+    return `<div class="pl trainrow" id="tr-${cssId(t.track_pk)}">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        ${vid ? `<button onclick="play('${jsarg(vid)}', '${jsarg(t.canonical_title)}', '${jsarg(t.track_pk)}')">▶</button>` : ""}
+        <div style="flex:1;min-width:180px">
+          <div class="title">${esc(t.canonical_title)}${t.tag_match ? ' <span class="pill wip" title="its existing tags already point at this profile">tag match</span>' : ""}</div>
+          <div class="artist">${esc(t.canonical_artist)}${t.personal_rating ? " · " + "★".repeat(t.personal_rating) : ""}</div>
+        </div>
+        <span style="display:flex;gap:6px">
+          <button class="primary" title="a clean example of ${esc(pid)}" onclick="trainLabel('${jsarg(t.track_pk)}', '${jsarg(pid)}', 'positive')">✓ Yes</button>
+          <button title="clearly not ${esc(pid)}" onclick="trainLabel('${jsarg(t.track_pk)}', '${jsarg(pid)}', 'negative')">✕ No</button>
+          <button title="sounds close, but isn't — the most valuable label" onclick="trainLabel('${jsarg(t.track_pk)}', '${jsarg(pid)}', 'near_miss')">≈ Close</button>
+        </span>
+      </div>
+    </div>`;
+  };
+
+  el.innerHTML = `<div class="trainhead">
+      <a style="cursor:pointer;color:#6fb6d6" onclick="loadTraining()">← All profiles</a>
+      &nbsp; <b>${esc(pid)}</b> — ${r.positive || 0}/15 yes · ${r.negative_plus_near_miss || 0}/15 no+close · ${r.distinct_positive_artists || 0}/3 artists
+      <div class="sub" style="margin-top:4px">Listen, then one tap: <b>Yes</b> = clean example · <b>No</b> = clearly not · <b>Close</b> = sounds like it but isn't (teaches the boundary).</div>
+    </div>
+    <div id="trainlist">${state.trainCands.length ? state.trainCands.map(row).join("") : '<div class="empty">No unlabelled candidates left for this profile.</div>'}</div>`;
+}
+
+function cssId(s) { return s.replace(/[^a-zA-Z0-9_-]/g, "_"); }
+
+async function trainLabel(pk, pid, labelType) {
+  try {
+    await api("/api/reference/label", {
+      method: "POST",
+      body: JSON.stringify({ track_pk: pk, profile_id: pid, label_type: labelType }),
+    });
+    toast({ positive: "Labelled ✓ yes", negative: "Labelled ✕ no", near_miss: "Labelled ≈ close" }[labelType]);
+  } catch (e) { toast(e.message || "Couldn't label"); return; }
+  const el = $("tr-" + cssId(pk));
+  if (el) el.remove();
+  state.trainCands = (state.trainCands || []).filter(t => t.track_pk !== pk);
+  if (!state.trainCands.length) trainProfile(pid);
 }
 
 // ── Review: one queue, two sort lenses. One listen → rating + tags + cull. ──

@@ -98,6 +98,12 @@ def _video_discovery_batch_size(pass_type: str) -> int:
     return int(os.getenv("VIDEO_DISCOVERY_BATCH_SIZE", "10"))
 
 
+def _audio_discovery_batch_size(pass_type: str) -> int:
+    if pass_type == "night":
+        return int(os.getenv("NIGHT_AUDIO_DISCOVERY_BATCH_SIZE", "200"))
+    return int(os.getenv("AUDIO_DISCOVERY_BATCH_SIZE", "25"))
+
+
 def _flag(name: str, default: str = "1") -> bool:
     return os.getenv(name, default).strip() not in ("0", "false", "no", "")
 
@@ -224,6 +230,23 @@ def run_pass(pass_type: str = "day") -> None:
             )
         except Exception as e:
             _alert("Video discovery", e)
+
+    # ── 2d. Lawful audio-source discovery (Phase 3 — Ears) ──
+    # Finds lawful audio sources (Bandcamp artist uploads, iTunes official
+    # previews), scores them, and routes tracks toward the Mac compute node
+    # (lawful_audio_candidate ≥0.92 / weak 0.55–0.91 / no_audio_source).
+    # Ships dark: enable with AUDIO_DISCOVERY_ENABLED=1.
+    if _flag("AUDIO_DISCOVERY_ENABLED", "0"):
+        try:
+            from app.enrichment.audio_source import run_batch as audio_source_batch
+
+            asd = audio_source_batch(limit=_audio_discovery_batch_size(pass_type))
+            logger.info(
+                "Audio-source discovery: %d scanned, %d lawful, %d weak, %d none",
+                asd["scanned"], asd["lawful"], asd["weak"], asd["none"],
+            )
+        except Exception as e:
+            _alert("Audio-source discovery", e)
 
     # ── 3. Playlist sync ──
     try:
@@ -390,6 +413,19 @@ def run_night_jobs(night_date: str) -> None:
         except Exception as e:
             _alert("Night job: bandcamp_sweep", e)
             _record_job("bandcamp_sweep", night_date, "error", {"error": str(e)})
+
+    # Job 10 — kNN classification (Phase 3). Nightly, never on the hot path;
+    # only profiles past the readiness gate classify. Ships dark:
+    # KNN_CLASSIFY_ENABLED=1 to enable.
+    if _flag("KNN_CLASSIFY_ENABLED", "0") and runs.should_run("knn_classify", night_date):
+        try:
+            from app.tags.knn_classifier import run_classification
+            result = run_classification()
+            _record_job("knn_classify", night_date, "ok", result)
+            logger.info("Night job knn_classify: %s", result)
+        except Exception as e:
+            _alert("Night job: knn_classify", e)
+            _record_job("knn_classify", night_date, "error", {"error": str(e)})
 
     # Job 5 — DB maintenance (quick_check + ANALYZE; VACUUM on VACUUM_WEEKDAY).
     if _flag("DB_MAINTENANCE_NIGHTLY") and runs.should_run("db_maintenance", night_date):
