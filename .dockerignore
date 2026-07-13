@@ -1,0 +1,16 @@
+# Keep docker build contexts lean — both the server image (Dockerfile, context .)
+# and the compute node (compute_node/Dockerfile, context .. = this dir).
+.git
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+data
+docs
+oauth.json
+.env
+compute_node/.env
+*.db
+*.db-wal
+*.db-shm
+litestream.yml

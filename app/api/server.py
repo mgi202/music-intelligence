@@ -1761,6 +1761,12 @@ class AudioResultRequest(BaseModel):
     camelot_key: Optional[str] = None
     clap_vector: Optional[list[float]] = None
     model_versions: Optional[dict] = None
+    # Locked measurement set (2026-07-13) — all optional, older nodes omit them.
+    beat_positions: Optional[list[float]] = None   # beat grid, seconds
+    chords: Optional[dict] = None                  # segments + summary
+    hpcp: Optional[list[float]] = None             # 12-bin harmonic fingerprint
+    predictions: Optional[dict] = None             # genre/mood/theme/instrument probs
+    structure: Optional[dict] = None               # intro/outro/drop/energy curve
 
 
 class PromptEmbeddingsRequest(BaseModel):

@@ -204,6 +204,19 @@ CREATE TABLE IF NOT EXISTS audio_features (
     loudness_lufs           REAL,
     dynamic_range           REAL,
     speechiness             REAL,
+    -- Locked measurement set (2026-07-13, capture-once): everything computed
+    -- in the single download/decode pass — adding a measure later would need
+    -- a full library re-download.
+    onset_rate              REAL,    -- onsets/second (busyness)
+    key_strength            REAL,    -- KeyExtractor confidence 0..1
+    dissonance              REAL,    -- mean sensory dissonance 0..1
+    spectral_centroid       REAL,    -- mean brightness, Hz
+    approachability         REAL,    -- EffNet-Discogs regression head 0..1
+    engagement              REAL,    -- EffNet-Discogs regression head 0..1
+    beat_positions_json     TEXT,    -- beat-grid timestamps, seconds
+    chords_json             TEXT,    -- run-length chord segments + summary
+    hpcp_json               TEXT,    -- 12-bin mean harmonic fingerprint
+    model_predictions_json  TEXT,    -- raw genre/mood/theme/instrument probabilities (audit)
     source_candidate_id     INTEGER,
     source_confidence       REAL,
     source_lawful_basis     TEXT,

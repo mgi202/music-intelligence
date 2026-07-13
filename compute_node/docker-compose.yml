@@ -1,0 +1,25 @@
+# MIS compute node — one command, exits when the queue drains:
+#
+#   docker compose -f compute_node/docker-compose.yml up
+#
+# First run builds the image (~30–60 min: it bakes in torch, the Essentia TF
+# models and the 1.9 GB CLAP checkpoint) — later runs start in seconds.
+# Config lives in compute_node/.env (copy .env.example). See README.md.
+services:
+  compute-node:
+    build:
+      context: ..                       # repo root (requirements-compute.txt)
+      dockerfile: compute_node/Dockerfile
+    image: mis-compute-node
+    platform: linux/amd64               # no aarch64 essentia-tensorflow wheels;
+                                        # runs under Rosetta on Apple Silicon
+    env_file:
+      - .env                            # MIS_SERVER, AUDIO_NODE_TOKEN, TS_AUTHKEY
+    environment:
+      MIS_BATCH: ${MIS_BATCH:-4}
+      MIS_REPROCESS: ${MIS_REPROCESS:-0}
+    volumes:
+      - tailscale-state:/var/lib/tailscale   # keeps the tailnet identity across runs
+
+volumes:
+  tailscale-state:

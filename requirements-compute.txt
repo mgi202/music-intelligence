@@ -1,26 +1,28 @@
-# Music Intelligence System — Mac compute node ONLY (Phase 3 "Ears").
+# Music Intelligence System — compute node ONLY (Phase 3 "Ears").
 #
-# Install into a dedicated venv on the Mac, NEVER into the server image, CI,
-# or requirements.txt. The Mac node downloads lawful audio to a temp file,
-# extracts features (Essentia), key (KeyFinder), and a 512-dim CLAP embedding,
-# posts the results to the VPS over Tailscale, and deletes the audio.
+# Installed INSIDE the compute-node Docker image (compute_node/Dockerfile,
+# linux/amd64) — NEVER into the server image, CI, or requirements.txt.
+# torch/torchaudio are installed separately in the Dockerfile from the
+# PyTorch CPU index (the default index pulls multi-GB CUDA builds).
 #
-#   python3 -m venv ~/.mis-compute-venv
-#   ~/.mis-compute-venv/bin/pip install -r requirements-compute.txt
-#   see compute_node/README.md for the run command
+# Run: docker compose -f compute_node/docker-compose.yml up
+# (see compute_node/README.md)
 #
 # Notes:
-# - essentia has no official macOS arm64 wheels on PyPI. On Apple Silicon
-#   install it via Homebrew (`brew install essentia`) and let the agent find
-#   it, or use the librosa fallback the agent ships with (it degrades
-#   gracefully per-extractor and reports which backends ran).
-# - keyfinder-cli (`brew install libkeyfinder` + keyfinder-cli) is preferred
-#   for Camelot keys; the agent falls back to Essentia/librosa key detection.
+# - essentia-tensorflow publishes manylinux x86_64 wheels only (no aarch64) —
+#   that is why the image is linux/amd64 under Rosetta on Apple Silicon.
+#   macOS arm64 wheels exist but the native pip path is broken
+#   (MTG/essentia#1486); don't "simplify" back to a host venv.
+# - numpy<2 is required by laion-clap (1.1.7: numpy>=1.23.5,<2).
+# - pysocks lets requests use the in-container tailscaled SOCKS proxy
+#   (MIS_PROXY) for server calls.
 
 requests>=2.32
+pysocks>=1.7.1
 yt-dlp>=2025.1.15
-numpy
+numpy<2
 soundfile
-librosa>=0.10        # decoding + feature fallbacks
-laion-clap>=1.1.6    # pulls torch + torchaudio
-# essentia            # uncomment on Linux/x86; on macOS prefer `brew install essentia`
+librosa>=0.10                        # decoding + feature fallbacks
+laion-clap==1.1.7                    # 512-dim CLAP embeddings
+transformers<5                       # laion-clap's text tower
+essentia-tensorflow==2.1b6.dev1389   # bundles libtensorflow; pinned wheel

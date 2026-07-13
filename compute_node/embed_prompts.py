@@ -1,10 +1,10 @@
 """
-One-shot: embed the tag-profile CLAP text prompts on the Mac and ship the
-vectors to the server (vector_query_profiles). The server never imports CLAP.
+One-shot: embed the tag-profile CLAP text prompts and ship the vectors to
+the server (vector_query_profiles). The server never imports CLAP.
 
-Run (same venv + env vars as agent.py):
-    MIS_SERVER=http://100.77.32.111:8080 AUDIO_NODE_TOKEN=... \
-        python compute_node/embed_prompts.py
+Run (inside the compute-node container — see compute_node/README.md):
+    docker compose -f compute_node/docker-compose.yml run --rm compute-node \
+        python /app/compute_node/embed_prompts.py
 
 Re-run whenever prompts change — upserts are idempotent.
 """
@@ -13,12 +13,18 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 import requests
 
 SERVER = os.environ.get("MIS_SERVER", "").rstrip("/")
 TOKEN = os.environ.get("AUDIO_NODE_TOKEN", "")
+MODELS_DIR = os.environ.get("MIS_MODELS_DIR", "")
+PROXY = os.environ.get("MIS_PROXY", "")
 CLAP_MODEL = "laion/clap-htsat-fused"
+CLAP_CKPT_NAME = "630k-audioset-fusion-best.pt"
+
+_PROXIES = {"http": PROXY, "https": PROXY} if PROXY else None
 
 
 def main() -> None:
@@ -28,7 +34,7 @@ def main() -> None:
 
     headers = {"X-Audio-Node-Token": TOKEN}
     profiles = requests.get(f"{SERVER}/api/audio/prompts", headers=headers,
-                            timeout=60).json()["profiles"]
+                            timeout=60, proxies=_PROXIES).json()["profiles"]
     if not profiles:
         print("No profiles carry prompts — nothing to embed.")
         return
@@ -38,7 +44,11 @@ def main() -> None:
     import laion_clap
     import numpy as np
     model = laion_clap.CLAP_Module(enable_fusion=True)
-    model.load_ckpt()
+    ckpt = Path(MODELS_DIR or "") / "clap" / CLAP_CKPT_NAME
+    if MODELS_DIR and ckpt.is_file():
+        model.load_ckpt(str(ckpt))     # baked into the image — no download
+    else:
+        model.load_ckpt()
 
     texts, keys = [], []
     for p in profiles:
@@ -59,7 +69,8 @@ def main() -> None:
         ],
     }
     resp = requests.post(f"{SERVER}/api/audio/prompt-embeddings",
-                         json=payload, headers=headers, timeout=120)
+                         json=payload, headers=headers, timeout=120,
+                         proxies=_PROXIES)
     resp.raise_for_status()
     print(f"Stored {resp.json()['stored']} prompt embeddings on the server.")
 

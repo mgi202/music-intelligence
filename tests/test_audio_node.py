@@ -207,6 +207,162 @@ def test_model_bump_marks_stale_without_reprocess(db, monkeypatch):
     assert [j["track_pk"] for j in jobs] == ["old"]
 
 
+# ── Locked measurement set (2026-07-13) ──────────────────────────────────────
+
+EXTENDED_PAYLOAD = {
+    "features": {"bpm": 128.0, "energy": 0.8, "valence": 0.31, "arousal": 0.7,
+                 "acousticness": 0.05, "instrumentalness": 0.92,
+                 "danceability": 0.7, "onset_rate": 3.4, "key_strength": 0.81,
+                 "dissonance": 0.44, "spectral_centroid": 1834.2,
+                 "approachability": 0.62, "engagement": 0.58},
+    "beat_positions": [0.5, 0.97, 1.44],
+    "chords": {"segments": [{"chord": "Am", "start": 0.0, "end": 7.4}],
+               "summary": ["Am", "F"]},
+    "hpcp": [0.1] * 12,
+    "predictions": {
+        "genre": {"Electronic---Techno": 0.55, "Electronic---House": 0.18,
+                  "Rock---Indie Rock": 0.02},
+        "moodtheme": {"dark": 0.35, "hypnotic": 0.22, "driving": 0.16,
+                      "summer": 0.04},
+        "mood": {"aggressive": 0.71, "happy": 0.12},
+        "instrument": {"synthesizer": 0.66, "drums": 0.3, "violin": 0.01},
+    },
+    "structure": {"intro_seconds": 14.5, "outro_seconds": 28.0,
+                  "breakdown_count": 2, "first_drop_seconds": 61.0,
+                  "peak_energy_position": 0.64, "energy_stability": 0.72,
+                  "energy_slope_signed": 0.18, "energy_rise_score": 0.4,
+                  "energy_drop_score": 0.35, "beat_grid_confidence": 0.8,
+                  "structure_confidence": 0.5},
+}
+
+
+def _post_extended(cl, cid, essentia_ver="effnet-bs64-1+heads-1"):
+    return cl.post("/api/audio/result", headers=TOKEN, json={
+        "candidate_id": cid, "status": "ok", "camelot_key": "8A",
+        "clap_vector": VEC,
+        "model_versions": {"essentia": essentia_ver, "clap": "clap-v1",
+                           "extractor": "test/2"},
+        **EXTENDED_PAYLOAD,
+    })
+
+
+def test_extended_result_writes_scalars_jsons_and_structure(db, monkeypatch):
+    monkeypatch.setenv("AUDIO_NODE_TOKEN", "sekrit")
+    _quiet_qdrant(monkeypatch)
+    cid = _seed_candidate(db)
+    r = _post_extended(_client(), cid)
+    assert r.status_code == 200
+    conn = get_connection(db)
+    af = conn.execute("SELECT * FROM audio_features WHERE track_pk='t1'").fetchone()
+    st = conn.execute("SELECT * FROM track_structure WHERE track_pk='t1'").fetchone()
+    conn.close()
+    assert af["onset_rate"] == 3.4 and af["key_strength"] == 0.81
+    assert af["dissonance"] == 0.44 and af["spectral_centroid"] == 1834.2
+    assert af["approachability"] == 0.62 and af["engagement"] == 0.58
+    import json as _json
+    assert _json.loads(af["beat_positions_json"]) == [0.5, 0.97, 1.44]
+    assert _json.loads(af["chords_json"])["summary"] == ["Am", "F"]
+    assert len(_json.loads(af["hpcp_json"])) == 12
+    assert "genre" in _json.loads(af["model_predictions_json"])  # audit copy
+    assert st is not None
+    assert st["intro_seconds"] == 14.5 and st["first_drop_seconds"] == 61.0
+    assert st["breakdown_count"] == 2 and st["extractor_version"] == "test/2"
+
+
+def test_predictions_become_audio_inferred_tags(db, monkeypatch):
+    monkeypatch.setenv("AUDIO_NODE_TOKEN", "sekrit")
+    _quiet_qdrant(monkeypatch)
+    cid = _seed_candidate(db)
+    r = _post_extended(_client(), cid)
+    assert r.json()["tags_written"] > 0
+    conn = get_connection(db)
+    rows = conn.execute(
+        "SELECT tag, source, confidence FROM track_tags "
+        "WHERE track_pk='t1' AND tag_type='audio_inferred'").fetchall()
+    conn.close()
+    tags = {r["tag"]: r for r in rows}
+    # Genre labels are normalised to their style part, threshold 0.15 applies.
+    assert "techno" in tags and tags["techno"]["source"] == "essentia:genre"
+    assert "house" in tags
+    assert "indie-rock" not in tags          # 0.02 < threshold
+    # Moodtheme over threshold lands; 'summer' (0.04) does not.
+    assert "dark" in tags and "hypnotic" in tags and "summer" not in tags
+    # Binary mood heads use the higher 0.60 threshold.
+    assert "aggressive" in tags and "happy" not in tags
+    # Instruments over 0.20 land.
+    assert "synthesizer" in tags and "drums" in tags and "violin" not in tags
+    assert tags["techno"]["confidence"] == 0.55
+
+
+def test_reprocess_replaces_stale_audio_inferred_tags(db, monkeypatch):
+    monkeypatch.setenv("AUDIO_NODE_TOKEN", "sekrit")
+    _quiet_qdrant(monkeypatch)
+    cl = _client()
+    cid = _seed_candidate(db)
+    _post_extended(cl, cid)
+    # Second pass: model no longer predicts 'house' — the old tag must go.
+    payload = {
+        "candidate_id": cid, "status": "ok", "clap_vector": VEC,
+        "model_versions": {"essentia": "effnet-bs64-1+heads-1",
+                           "clap": "clap-v1", "extractor": "test/2"},
+        "features": {"bpm": 128.0},
+        "predictions": {"genre": {"Electronic---Techno": 0.61}},
+    }
+    cl.post("/api/audio/result", headers=TOKEN, json=payload)
+    conn = get_connection(db)
+    tags = {r["tag"] for r in conn.execute(
+        "SELECT tag FROM track_tags WHERE track_pk='t1' "
+        "AND tag_type='audio_inferred'")}
+    conn.close()
+    assert tags == {"techno"}
+
+
+def test_audio_inferred_never_shadows_manual_tag(db, monkeypatch):
+    monkeypatch.setenv("AUDIO_NODE_TOKEN", "sekrit")
+    _quiet_qdrant(monkeypatch)
+    cid = _seed_candidate(db)
+    with db_conn(db) as conn:
+        conn.execute(
+            "INSERT INTO track_tags (track_pk, tag, tag_type, source, confidence) "
+            "VALUES ('t1', 'techno', 'private_manual', 'manual', 1.0)")
+    _post_extended(_client(), cid)
+    conn = get_connection(db)
+    rows = conn.execute(
+        "SELECT tag_type FROM track_tags WHERE track_pk='t1' AND tag='techno'"
+    ).fetchall()
+    conn.close()
+    assert [r["tag_type"] for r in rows] == ["private_manual"]
+
+
+def test_essentia_model_bump_marks_stale(db, monkeypatch):
+    monkeypatch.setenv("AUDIO_NODE_TOKEN", "sekrit")
+    _quiet_qdrant(monkeypatch)
+    cl = _client()
+    cid1 = _seed_candidate(db, pk="old")
+    _post_extended(cl, cid1, essentia_ver="effnet-bs64-1+heads-1")
+    cid2 = _seed_candidate(db, pk="new")
+    _post_extended(cl, cid2, essentia_ver="effnet-bs64-2+heads-2")
+    conn = get_connection(db)
+    old = conn.execute("SELECT feature_model_status, stale_reason FROM "
+                       "audio_features WHERE track_pk='old'").fetchone()
+    conn.close()
+    assert old["feature_model_status"] == "stale"
+    assert "essentia model version bump" in old["stale_reason"]
+
+
+def test_plain_result_without_new_fields_still_works(db, monkeypatch):
+    """An older node payload (no structure/predictions) must ingest as before."""
+    monkeypatch.setenv("AUDIO_NODE_TOKEN", "sekrit")
+    _quiet_qdrant(monkeypatch)
+    cid = _seed_candidate(db)
+    r = _post_result(_client(), cid)
+    assert r.status_code == 200 and r.json()["tags_written"] == 0
+    conn = get_connection(db)
+    st = conn.execute("SELECT 1 FROM track_structure WHERE track_pk='t1'").fetchone()
+    conn.close()
+    assert st is None
+
+
 # ── Prompt embeddings round-trip ──────────────────────────────────────────────
 
 def test_prompt_embeddings_store_and_load(db, monkeypatch):

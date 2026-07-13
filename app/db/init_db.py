@@ -162,6 +162,21 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE audio_features ADD COLUMN clap_vector_json TEXT")
         print("Migration applied: audio_features.clap_vector_json")
 
+    # 2026-07-13 (compute-node Docker): locked measurement set — capture-once
+    # signal descriptors + model-head scalars/JSONs on audio_features. All
+    # additive; NULL until a track is (re)processed by the containerised node.
+    if af_cols and "onset_rate" not in af_cols:
+        for col, sqltype in (
+            ("onset_rate", "REAL"), ("key_strength", "REAL"),
+            ("dissonance", "REAL"), ("spectral_centroid", "REAL"),
+            ("approachability", "REAL"), ("engagement", "REAL"),
+            ("beat_positions_json", "TEXT"), ("chords_json", "TEXT"),
+            ("hpcp_json", "TEXT"), ("model_predictions_json", "TEXT"),
+        ):
+            conn.execute(f"ALTER TABLE audio_features ADD COLUMN {col} {sqltype}")
+        print("Migration applied: audio_features locked measurement set "
+              "(onset_rate … model_predictions_json)")
+
     # 2026-07-03 (review refinement): display order for tag-profile chips —
     # functional chips render in set order, not alphabetically. Values are
     # (re)stamped by reconcile_tag_profiles on every init.

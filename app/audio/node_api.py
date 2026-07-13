@@ -36,7 +36,37 @@ _FEATURE_COLS = (
     "bpm", "bpm_confidence", "musical_key", "musical_scale", "camelot_key",
     "valence", "arousal", "danceability", "energy", "acousticness",
     "instrumentalness", "loudness_lufs", "dynamic_range", "speechiness",
+    # Locked measurement set (2026-07-13) — capture-once scalars.
+    "onset_rate", "key_strength", "dissonance", "spectral_centroid",
+    "approachability", "engagement",
 )
+
+# payload key → audio_features JSON column (raw arrays/objects, stored verbatim)
+_JSON_COLS = {
+    "beat_positions": "beat_positions_json",
+    "chords": "chords_json",
+    "hpcp": "hpcp_json",
+    "predictions": "model_predictions_json",
+}
+
+_STRUCTURE_COLS = (
+    "intro_seconds", "outro_seconds", "breakdown_count", "first_drop_seconds",
+    "peak_energy_position", "energy_stability", "energy_slope_signed",
+    "energy_rise_score", "energy_drop_score", "beat_grid_confidence",
+    "structure_confidence",
+)
+
+# Model predictions → audio_inferred tags. Per-group confidence thresholds and
+# caps: multilabel heads (moodtheme/instrument) produce low sigmoid scores, the
+# binary mood heads produce calibrated probabilities — one global threshold
+# would either drown the surface or starve it.
+_TAG_GROUPS = {
+    # group: (env var, default threshold, max tags)
+    "genre":      ("AUDIO_TAG_THRESHOLD_GENRE", 0.15, 3),
+    "moodtheme":  ("AUDIO_TAG_THRESHOLD_MOODTHEME", 0.15, 5),
+    "mood":       ("AUDIO_TAG_THRESHOLD_MOOD", 0.60, 5),
+    "instrument": ("AUDIO_TAG_THRESHOLD_INSTRUMENT", 0.20, 4),
+}
 
 
 def _now() -> str:
@@ -155,25 +185,112 @@ def claim_jobs(batch: int = 4, reprocess: bool = False,
 # Result
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _mark_other_versions_stale(conn, track_pk: str, clap_version: str | None) -> int:
-    """Stale-first policy: when a result arrives under a clap model version,
-    rows processed under a DIFFERENT version become 'stale' (kept and used,
-    reprocessed only by the explicit batch job). Single-node assumption:
-    versions only move forward, so the incoming version is current."""
-    if not clap_version:
-        return 0
-    cur = conn.execute(
-        """UPDATE audio_features
-           SET feature_model_status = 'stale',
-               stale_reason = 'clap model version bump to ' || ?,
-               stale_marked_at = ?
-           WHERE clap_model_version IS NOT NULL
-             AND clap_model_version != ?
-             AND feature_model_status = 'current'
-             AND track_pk != ?""",
-        (clap_version, _now(), clap_version, track_pk),
+def _normalise_tag(label: str) -> str:
+    """Model label → tag-store form. Discogs genre labels arrive as
+    'Electronic---Techno' (genre---style) — the style is the tag. Everything
+    is lowercased and space/slash-hyphenated to match the locked vocab style
+    ('peak-time', 'melodic-techno'); the alias curation layer maps from there."""
+    if "---" in label:
+        label = label.rsplit("---", 1)[1]
+    return label.strip().lower().replace("/", "-").replace(" ", "-")
+
+
+def _write_audio_inferred_tags(conn, track_pk: str, predictions: dict) -> int:
+    """Route model predictions onto the tag surface: qualifying labels become
+    track_tags rows at tag_type='audio_inferred' (one trust tier below
+    private tags via effective_track_tags — they can never shadow a manual
+    tag, and following pipeline convention we skip a tag Matthias already set
+    manually). Previous essentia-sourced rows are replaced wholesale so a
+    reprocess never leaves stale tags behind. Raw probabilities stay in
+    model_predictions_json for audit."""
+    conn.execute(
+        "DELETE FROM track_tags WHERE track_pk = ? AND tag_type = 'audio_inferred' "
+        "AND source LIKE 'essentia:%'",
+        (track_pk,),
     )
-    return cur.rowcount
+    written = 0
+    for group, (env, default, cap) in _TAG_GROUPS.items():
+        probs = predictions.get(group)
+        if not isinstance(probs, dict):
+            continue
+        try:
+            threshold = float(os.getenv(env, str(default)))
+        except ValueError:
+            threshold = default
+        picked = sorted(
+            ((label, p) for label, p in probs.items()
+             if isinstance(p, (int, float)) and p >= threshold),
+            key=lambda kv: kv[1], reverse=True,
+        )[:cap]
+        for label, prob in picked:
+            tag = _normalise_tag(label)
+            if not tag:
+                continue
+            if conn.execute(
+                "SELECT 1 FROM track_tags WHERE track_pk = ? AND tag = ? "
+                "AND tag_type = 'private_manual'", (track_pk, tag),
+            ).fetchone():
+                continue
+            conn.execute(
+                """INSERT INTO track_tags
+                       (track_pk, tag, tag_type, source, confidence, evidence_json)
+                   VALUES (?, ?, 'audio_inferred', ?, ?, ?)
+                   ON CONFLICT(track_pk, tag, source) DO UPDATE SET
+                       confidence = excluded.confidence,
+                       evidence_json = excluded.evidence_json""",
+                (track_pk, tag, f"essentia:{group}", round(float(prob), 4),
+                 json.dumps({"label": label, "prob": round(float(prob), 4)})),
+            )
+            written += 1
+    return written
+
+
+def _upsert_structure(conn, track_pk: str, structure: dict,
+                      extractor_version: str | None) -> None:
+    """Fill track_structure from the node's beat+energy segmentation (locked
+    measures 15/16). Only known columns are accepted; absent keys stay NULL."""
+    vals = {c: structure.get(c) for c in _STRUCTURE_COLS}
+    assignments = ", ".join(f"{c} = excluded.{c}" for c in _STRUCTURE_COLS)
+    conn.execute(
+        f"""INSERT INTO track_structure
+               (track_pk, {', '.join(_STRUCTURE_COLS)}, extractor_version, processed_at)
+           VALUES (?, {', '.join('?' * len(_STRUCTURE_COLS))}, ?, ?)
+           ON CONFLICT(track_pk) DO UPDATE SET
+               {assignments},
+               extractor_version = excluded.extractor_version,
+               processed_at = excluded.processed_at""",
+        (track_pk, *[vals[c] for c in _STRUCTURE_COLS], extractor_version, _now()),
+    )
+
+
+def _mark_other_versions_stale(conn, track_pk: str, clap_version: str | None,
+                               essentia_version: str | None = None) -> int:
+    """Stale-first policy: when a result arrives under a clap OR essentia
+    model version, rows processed under a DIFFERENT version become 'stale'
+    (kept and used, reprocessed only by the explicit batch job). Single-node
+    assumption: versions only move forward, so the incoming version is
+    current. The essentia stamp carries the embedding+heads manifest, so a
+    TF-model bump is detected the same way a CLAP bump is."""
+    marked = 0
+    for column, version, what in (
+        ("clap_model_version", clap_version, "clap"),
+        ("essentia_model_version", essentia_version, "essentia"),
+    ):
+        if not version:
+            continue
+        cur = conn.execute(
+            f"""UPDATE audio_features
+                SET feature_model_status = 'stale',
+                    stale_reason = '{what} model version bump to ' || ?,
+                    stale_marked_at = ?
+                WHERE {column} IS NOT NULL
+                  AND {column} != ?
+                  AND feature_model_status = 'current'
+                  AND track_pk != ?""",
+            (version, _now(), version, track_pk),
+        )
+        marked += cur.rowcount
+    return marked
 
 
 def submit_result(payload: dict, db_path: str | None = None) -> dict:
@@ -235,19 +352,23 @@ def submit_result(payload: dict, db_path: str | None = None) -> dict:
         # Explicit camelot key field wins over the features dict copy.
         if payload.get("camelot_key"):
             cols["camelot_key"] = payload["camelot_key"]
+        json_cols = {col: (json.dumps(payload[key])
+                           if payload.get(key) is not None else None)
+                     for key, col in _JSON_COLS.items()}
 
+        all_cols = _FEATURE_COLS + tuple(json_cols)
         conn.execute(
             f"""INSERT INTO audio_features (
-                   track_pk, {', '.join(_FEATURE_COLS)},
+                   track_pk, {', '.join(all_cols)},
                    source_candidate_id, source_confidence, source_lawful_basis,
                    extractor_version, essentia_model_version,
                    keyfinder_version, clap_model_version,
                    feature_model_status, stale_reason, stale_marked_at,
                    clap_vector_json, processed_at
-               ) VALUES (?, {', '.join('?' * len(_FEATURE_COLS))},
+               ) VALUES (?, {', '.join('?' * len(all_cols))},
                          ?, ?, ?, ?, ?, ?, ?, 'current', NULL, NULL, ?, ?)
                ON CONFLICT(track_pk) DO UPDATE SET
-                   {', '.join(f"{c} = excluded.{c}" for c in _FEATURE_COLS)},
+                   {', '.join(f"{c} = excluded.{c}" for c in all_cols)},
                    source_candidate_id = excluded.source_candidate_id,
                    source_confidence = excluded.source_confidence,
                    source_lawful_basis = excluded.source_lawful_basis,
@@ -260,14 +381,27 @@ def submit_result(payload: dict, db_path: str | None = None) -> dict:
                    clap_vector_json = excluded.clap_vector_json,
                    processed_at = excluded.processed_at""",
             (track_pk, *[cols[c] for c in _FEATURE_COLS],
+             *[json_cols[c] for c in json_cols],
              candidate_id, cand["confidence"], cand["lawful_basis"],
              versions.get("extractor"), versions.get("essentia"),
              versions.get("keyfinder"), versions.get("clap"),
              json.dumps(vector) if vector else None, _now()),
         )
 
+        structure = payload.get("structure")
+        if isinstance(structure, dict) and structure:
+            _upsert_structure(conn, track_pk, structure,
+                              versions.get("extractor"))
+
+        predictions = payload.get("predictions")
+        tags_written = 0
+        if isinstance(predictions, dict) and predictions:
+            tags_written = _write_audio_inferred_tags(conn, track_pk,
+                                                      predictions)
+
         stale_marked = _mark_other_versions_stale(conn, track_pk,
-                                                  versions.get("clap"))
+                                                  versions.get("clap"),
+                                                  versions.get("essentia"))
 
         conn.execute(
             """INSERT INTO enrichment_state (
@@ -305,6 +439,7 @@ def submit_result(payload: dict, db_path: str | None = None) -> dict:
         "track_pk": track_pk,
         "match_status": new_status,
         "stale_marked": stale_marked,
+        "tags_written": tags_written,
     }
 
 
