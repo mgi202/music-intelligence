@@ -289,6 +289,8 @@
   .pbar .ptrack { height: 7px; background: var(--panel2); border-radius: 999px; overflow: hidden; }
   .pbar .pfill { height: 100%; background: var(--accent); border-radius: 999px; transition: width .3s; }
   .pbar .pfill.done { background: #3fae6a; }
+  .trainrow button { background: var(--panel2); border: 1px solid #2b2b38; color: var(--text); padding: 6px 12px; border-radius: 8px; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+  .trainrow button.primary { background: var(--accent); color: #111; border-color: var(--accent); font-weight: 600; }
   /* Tag tap-palette in the add-tag modal */
   /* Redesign 2026-07-15: desktop-first, search-driven, one boxed section per
      layer so nothing bleeds together. */

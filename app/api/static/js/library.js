@@ -445,8 +445,12 @@ async function openTagModal(pk, t, opts = {}) {
     const activeFams = new Set([...trackFams, ...[...manual].filter(x => familyNames.has(x))]);
     let firstHit = null;
     const sections = LAYER_ORDER.filter(l => byLayer[l]).map(layer => {
-      // A–Z within each layer — predictable scanning (15 Jul).
-      let items = [...byLayer[layer]].sort((a, b) => a.tag_name.localeCompare(b.tag_name));
+      // family/subgenre read A–Z; functional/personal/era keep the API's
+      // tag_profiles.sort_order so the chips line up with the Review card
+      // (set order, decade order) instead of alphabetical (16 Jul).
+      let items = layer === "family" || layer === "subgenre"
+        ? [...byLayer[layer]].sort((a, b) => a.tag_name.localeCompare(b.tag_name))
+        : [...byLayer[layer]];
       let extra = "";
       if (q) {
         items = items.filter(p => p.tag_name.toLowerCase().includes(q));
@@ -511,6 +515,9 @@ async function openTagModal(pk, t, opts = {}) {
       } else {
         await api(`/api/tracks/${pk}/tags`, { method: "POST", body: JSON.stringify({ tag }) });
         manual.add(key); notifyChange(tag, true); toast(`Tagged: ${key}`);
+        // Picking a family is explicit intent to gate — snap the "show all
+        // styles" escape hatch back off so its subgenres prune immediately.
+        if (familyNames.has(key)) showAllSubs = false;
       }
       renderPalette();
     } catch (e) { toast("Failed — try again"); if (btn) btn.disabled = false; }
