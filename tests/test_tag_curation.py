@@ -128,6 +128,21 @@ def test_remove_tag_by_effective_name_deletes_aliased_row(db):
     assert _eff(db, "t1") == []
 
 
+def test_api_delete_tag_with_slash_and_reject_routes_still_match(client, db):
+    """The tags DELETE route is greedy ({tag:path}) so slashed names work —
+    and the more specific …/tags/{tag}/reject routes must still win."""
+    with db_conn(db) as c:
+        insert_track(c, "t1")
+        _tag(c, "t1", "chart noise", "lastfm")  # a public tag to reject
+    # Slashed free-text tag round-trips through the API.
+    assert client.post("/api/tracks/t1/tags", json={"tag": "acid / cosmic"}).status_code == 200
+    r = client.delete("/api/tracks/t1/tags/acid%20%2F%20cosmic")
+    assert r.status_code == 200 and r.json()["removed"] is True
+    # Reject + unreject still route (not swallowed by the greedy DELETE).
+    assert client.post("/api/tracks/t1/tags/chart noise/reject", json={}).status_code == 200
+    assert client.delete("/api/tracks/t1/tags/chart noise/reject").status_code == 200
+
+
 def test_apply_remove_roundtrip_without_alias(db):
     from app.tags.tag_manager import apply_tag, remove_tag
     with db_conn(db) as c:

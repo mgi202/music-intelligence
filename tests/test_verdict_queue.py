@@ -307,6 +307,43 @@ def test_queue_caps_suggestions_at_max(db):
 
 # ── Reject → near_miss stickiness ──────────────────────────────────────────────
 
+def test_suggestion_folds_alias_and_skips_dead_profile(db):
+    """A public tag that the vocabulary aliases elsewhere must support the
+    CANONICAL profile — and a profile whose own name is an alias source is
+    dead (tagging it stores the canonical name) so it is never suggested.
+    Regression: 'funk / soul' suggestions whose reject 404ed (16 Jul)."""
+    from app.tags.verdict_queue import build_queue
+    with db_conn(db) as c:
+        insert_track(c, "t1", canonical_artist="A", ytm_track_id="v1")
+        _pub(c, "t1", "boogie woogie", "lastfm", 0.8)
+        c.execute("INSERT INTO tag_profiles (profile_id, tag_name, taxonomy_layer) "
+                  "VALUES ('boogie', 'boogie', 'subgenre')")
+        c.execute("INSERT INTO tag_profiles (profile_id, tag_name, taxonomy_layer) "
+                  "VALUES ('boogie woogie', 'boogie woogie', 'subgenre')")
+        c.execute("INSERT INTO tag_vocabulary (tag, alias_to) "
+                  "VALUES ('boogie woogie', 'boogie')")
+
+    sugg = build_queue(db_path=db)["tracks"][0]["suggestions"]
+    pids = {s["profile_id"] for s in sugg}
+    assert "boogie" in pids            # folded onto the canonical profile
+    assert "boogie woogie" not in pids  # dead profile never offered
+
+
+def test_api_verdict_reject_profile_with_slash(client, db):
+    """Profile names may contain '/' (vocab manager allows it) — the reject
+    route must still match. Was a hard 404: path params don't span slashes."""
+    with db_conn(db) as c:
+        insert_track(c, "t1", canonical_artist="A", ytm_track_id="v1")
+        c.execute("INSERT INTO tag_profiles (profile_id, tag_name, taxonomy_layer) "
+                  "VALUES ('afro / cosmic', 'afro / cosmic', 'subgenre')")
+    r = client.post("/api/tracks/t1/verdict/reject/afro%20%2F%20cosmic", json={})
+    assert r.status_code == 200
+    from app.tags.reference_manager import list_reference_labels
+    labels = {(l["profile_id"], l["label_type"]) for l in
+              list_reference_labels(track_pk="t1", db_path=db)}
+    assert ("afro / cosmic", "near_miss") in labels
+
+
 def test_reject_creates_sticky_near_miss(db):
     from app.tags.reference_manager import (
         reject_suggestion, list_reference_labels, recompute_track_references,

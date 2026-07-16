@@ -373,12 +373,9 @@ def add_tag(track_pk: str, body: TagRequest):
         raise HTTPException(404 if "not found" in str(e) else 400, str(e))
 
 
-@app.delete("/api/tracks/{track_pk}/tags/{tag}")
-def delete_tag(track_pk: str, tag: str):
-    removed = tag_manager.remove_tag(track_pk, tag)
-    if not removed:
-        raise HTTPException(404, "No private_manual tag with that name on this track")
-    return {"removed": True}
+# NOTE: the tags DELETE route lives below unreject_tag — its {tag:path} param
+# is greedy (tag names may contain "/", e.g. "funk / soul"), so the more
+# specific …/tags/{tag}/reject routes must register first.
 
 
 # ─────────────────────────────────────────
@@ -582,7 +579,7 @@ def verdict_queue(
     return vq.build_queue(limit=limit, sort=sort, source_playlist=source_playlist)
 
 
-@app.post("/api/tracks/{track_pk}/verdict/reject/{profile_id}")
+@app.post("/api/tracks/{track_pk}/verdict/reject/{profile_id:path}")
 def verdict_reject(track_pk: str, profile_id: str):
     """Reject a suggestion → sticky near_miss exemplar for that profile
     ('sounds like but isn't'). The tag is NOT applied."""
@@ -891,6 +888,16 @@ def unreject_tag(track_pk: str, tag: str):
         if result.rowcount == 0:
             raise HTTPException(404, "No reject override for that tag on this track")
     return {"unrejected": True}
+
+
+@app.delete("/api/tracks/{track_pk}/tags/{tag:path}")
+def delete_tag(track_pk: str, tag: str):
+    """{tag:path} so names containing "/" (e.g. "funk / soul") route; must
+    register AFTER the …/tags/{tag}/reject routes or it would swallow them."""
+    removed = tag_manager.remove_tag(track_pk, tag)
+    if not removed:
+        raise HTTPException(404, "No private_manual tag with that name on this track")
+    return {"removed": True}
 
 
 # ─────────────────────────────────────────

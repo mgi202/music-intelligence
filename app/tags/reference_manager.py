@@ -379,30 +379,59 @@ def _build_tag_index(conn) -> tuple[dict[str, set[str]], dict[str, str]]:
     """
     import json as _json
 
+    # Alias fold (16 Jul): terms are matched post-fold, same as the
+    # effective_track_tags view — a public tag "funk / soul" must support the
+    # profile its alias points at (disco-funk), not a same-named profile. A
+    # profile whose OWN name folds away is dead (tagging it stores the
+    # canonical name) — excluded like a retired profile, so it never gets
+    # suggested and never receives derived labels.
+    aliases = {
+        _norm(r["tag"]): _norm(r["alias_to"])
+        for r in conn.execute(
+            "SELECT tag, alias_to FROM tag_vocabulary "
+            "WHERE alias_to IS NOT NULL AND alias_to != ''"
+        ).fetchall()
+    }
+
     raw: dict[str, set[str]] = {}
     layer: dict[str, str] = {}
     for row in conn.execute(
         "SELECT profile_id, tag_name, taxonomy_layer, context_terms_json "
         "FROM tag_profiles WHERE retired_at IS NULL"
     ).fetchall():
+        name = _norm(row["tag_name"])
+        if aliases.get(name, name) != name:
+            continue  # dead profile: its name folds into another profile
         pid = row["profile_id"]
         layer[pid] = row["taxonomy_layer"]
-        terms = {_norm(row["tag_name"])}
+        terms = {name}
         if row["context_terms_json"]:
             try:
                 terms.update(_norm(t) for t in _json.loads(row["context_terms_json"]))
             except (ValueError, TypeError):
                 pass
         for t in terms:
+            t = aliases.get(t, t)
             if t:
                 raw.setdefault(t, set()).add(pid)
 
+    # Index each canonical profile under every alias source folding into it,
+    # so raw public tags ("funk / soul") resolve to the canonical profile
+    # (disco-funk) without callers having to fold first.
+    for src, dst in aliases.items():
+        if dst in raw:
+            raw.setdefault(src, set()).update(raw[dst])
+
     # Drop over-generic terms (shared by 3+ profiles). tag_name terms are always
     # kept, since a profile's own name is never "too generic" for itself.
-    names = {_norm(r["tag_name"]) for r in
-             conn.execute(
-                 "SELECT tag_name FROM tag_profiles WHERE retired_at IS NULL"
-             ).fetchall()}
+    # Post-fold, so dead (alias-source) profile names don't shield anything.
+    names = {
+        n for n in (
+            _norm(r["tag_name"]) for r in conn.execute(
+                "SELECT tag_name FROM tag_profiles WHERE retired_at IS NULL"
+            ).fetchall())
+        if aliases.get(n, n) == n
+    }
     index = {
         term: pids for term, pids in raw.items()
         if term in names or len(pids) < 3
