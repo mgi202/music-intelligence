@@ -8,6 +8,8 @@ tag_profiles table to the locked vocab during init).
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from app.db.connection import db_conn, get_connection
@@ -19,6 +21,13 @@ def client(db):
     from fastapi.testclient import TestClient
     from app.api.server import app
     return TestClient(app)
+
+
+# Skip exclusion only holds for 14 days (verdict_queue: skipped resurface
+# after the cooldown) — a hardcoded date would age out and flip these tests.
+def _recent_skip():
+    return (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
 
 
 def _pub(conn, pk, tag, source="lastfm", confidence=0.5):
@@ -121,7 +130,7 @@ def test_queue_exclusions(db):
         _manual(c, "tagged", "warm-up")
         # skipped → excluded
         insert_track(c, "skip", canonical_artist="C", ytm_track_id="v_s",
-                     verdict_skipped_at="2026-07-02T00:00:00Z")
+                     verdict_skipped_at=_recent_skip())
         # blocked / dnr / quarantined / no-video → excluded
         insert_track(c, "blk", canonical_artist="D", ytm_track_id="v_b", blocked_from_playlists=1)
         insert_track(c, "dnr", canonical_artist="E", ytm_track_id="v_d", do_not_recommend=1)
@@ -204,7 +213,7 @@ def test_lens_eligibility_matrix(db):
         insert_track(c, "tagged", canonical_artist="D", ytm_track_id="v4")
         _manual(c, "tagged", "warm-up")
         insert_track(c, "skipped", canonical_artist="E", ytm_track_id="v5",
-                     verdict_skipped_at="2026-07-01T00:00:00Z")
+                     verdict_skipped_at=_recent_skip())
 
     newest = {t["pk"] for t in build_queue(db_path=db, sort="newest")["tracks"]}
     training = {t["pk"] for t in build_queue(db_path=db, sort="training")["tracks"]}
