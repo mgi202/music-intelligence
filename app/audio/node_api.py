@@ -125,7 +125,7 @@ def claim_jobs(batch: int = 4, reprocess: bool = False,
                     WHERE c2.track_pk = t.track_pk
                       AND c2.lawful_basis != 'unknown'
                       AND c2.rejected = 0
-                    ORDER BY c2.confidence DESC LIMIT 1
+                    ORDER BY c2.approved DESC, c2.confidence DESC LIMIT 1
                 )
                 WHERE af.feature_model_status = 'stale'
                   AND (c.claimed_at IS NULL OR c.claimed_at < ?)
@@ -152,7 +152,7 @@ def claim_jobs(batch: int = 4, reprocess: bool = False,
                     WHERE c2.track_pk = t.track_pk
                       AND c2.lawful_basis != 'unknown'
                       AND c2.rejected = 0
-                    ORDER BY c2.confidence DESC LIMIT 1
+                    ORDER BY c2.approved DESC, c2.confidence DESC LIMIT 1
                 )
                 WHERE t.match_status = 'lawful_audio_candidate'
                   AND (c.claimed_at IS NULL OR c.claimed_at < ?)

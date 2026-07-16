@@ -28,6 +28,13 @@ async function loadSourcePlaylists() {
   renderFacetRow();
 }
 
+// Label facet options (2026-07-16). Cheap — labels are sparse until
+// re-enrichment fills them; the facet button hides while the list is empty.
+async function loadLabelsFacet() {
+  try { state.labelsList = (await api("/api/labels?limit=500")).labels || []; } catch (e) {}
+  renderFacetRow();
+}
+
 // Grand total for "showing X of Y" (changes only on ingest — fetched per visit).
 async function loadGrandTotal() {
   try { state.grandTotal = (await api("/api/stats")).total_tracks; } catch (e) {}
@@ -78,6 +85,9 @@ function renderFacetRow() {
     html += facetBtnHtml("layer:" + layer, label, nSel > 0, nSel || "");
   }
   html += facetBtnHtml("playlist", pl ? esc(pl.playlist_name) : "All playlists", !!state.sourcePlaylist);
+  const lb = (state.labelsList || []).find(l => l.label_id === state.label);
+  if ((state.labelsList || []).length)
+    html += facetBtnHtml("label", lb ? esc(lb.name) : "Label", !!state.label);
   html += facetBtnHtml("sort", "Sort: " + (LIB_SORTS.find(s => s[0] === state.sort) || LIB_SORTS[0])[1],
                        state.sort !== "added_desc");
   html += `<button class="fbtn ${state.pendingVersions ? "on" : ""}"
@@ -143,6 +153,36 @@ function renderFacetDd(dd, id) {
       sel: state.sort === v, label: l,
       onPick: () => { state.sort = v; loadTracks(); closeFacetDd(); },
     }));
+    return;
+  }
+  if (id === "label") {
+    const items = state.labelsList || [];
+    let input = null;
+    if (items.length > 8) {
+      input = document.createElement("input");
+      input.placeholder = "Filter labels…";
+      input.onclick = (e) => e.stopPropagation();
+      dd.appendChild(input);
+    }
+    const list = document.createElement("div");
+    dd.appendChild(list);
+    const renderList = () => {
+      list.innerHTML = "";
+      const q = input ? input.value.trim().toLowerCase() : "";
+      fddRow(list, {
+        sel: !state.label, label: "All labels",
+        onPick: () => { state.label = ""; loadTracks(); closeFacetDd(); },
+      });
+      const shown = items.filter(l => !q || l.name.toLowerCase().includes(q));
+      shown.forEach(l => fddRow(list, {
+        sel: state.label === l.label_id, label: l.name, count: l.track_count,
+        onPick: () => { state.label = l.label_id; loadTracks(); closeFacetDd(); },
+      }));
+      if (!shown.length) list.innerHTML = '<div class="fddempty">No labels match.</div>';
+    };
+    if (input) input.oninput = renderList;
+    renderList();
+    if (input) setTimeout(() => input.focus(), 0);
     return;
   }
   if (id === "playlist") {
@@ -219,13 +259,15 @@ function removeTagFilter(tg) {
 
 function libHasFilters() {
   return !!(state.q || state.tags.length || state.rating !== "" || state.untagged
-            || state.sourcePlaylist || state.pendingVersions);
+            || state.sourcePlaylist || state.pendingVersions
+            || state.label || state.artist);
 }
 
 function clearAllFilters() {
   state.q = ""; $("search").value = "";
   state.rating = ""; state.untagged = false; state.tags = [];
   state.sourcePlaylist = ""; state.pendingVersions = false;
+  state.label = ""; state.artist = "";
   loadTracks(); renderFacetRow();
 }
 
@@ -244,6 +286,14 @@ function renderSumBar() {
     pills.push(pill(esc((RATING_OPTS.find(o => o[0] === state.rating) || [])[1] || ""), "state.rating='';loadTracks();renderFacetRow()"));
   const pl = (state.sourcePlaylists || []).find(p => p.playlist_id === state.sourcePlaylist);
   if (pl) pills.push(pill(esc(pl.playlist_name), "state.sourcePlaylist='';loadTracks();renderFacetRow()"));
+  if (state.label) {
+    const lb = (state.labelsList || []).find(l => l.label_id === state.label);
+    pills.push(pill("label: " + esc(lb ? lb.name : state.label), "state.label='';loadTracks();renderFacetRow()"));
+  }
+  if (state.artist) {
+    const ar = (state.artistsList || []).find(a => a.artist_id === state.artist);
+    pills.push(pill("artist: " + esc(ar ? ar.name : state.artist), "state.artist='';loadTracks();renderFacetRow()"));
+  }
   if (state.pendingVersions)
     pills.push(pill("⇱ versions", "state.pendingVersions=false;loadTracks();renderFacetRow()"));
   const grand = state.grandTotal || state.total;

@@ -1,23 +1,75 @@
-// ── Matches: sub-tabs (Duplicates / Suggested tags / Removed) ──
+// ── Matches: sub-tabs (Duplicates / Suggested tags / Audio sources / Removed) ──
 async function loadMatches() {
   state.reviewPairs = await api("/api/dedup").catch(() => []);
   state.classifQueue = (await api("/api/classifications").catch(() => ({ results: [] }))).results || [];
+  state.audioQueue = (await api("/api/audio-sources/review").catch(() => ({ tracks: [] }))).tracks || [];
   const badge = $("matchesbadge");
-  const total = state.reviewPairs.length + state.classifQueue.length;
+  const total = state.reviewPairs.length + state.classifQueue.length + state.audioQueue.length;
   if (total) { badge.textContent = total; badge.style.display = ""; }
   else badge.style.display = "none";
   const sub = state.matchesSub || "duplicates";
   $("matches").innerHTML = `<nav class="subtabs">
       <button id="sub-dup" class="${sub === "duplicates" ? "active" : ""}">Duplicates${state.reviewPairs.length ? ` <span class="badge">${state.reviewPairs.length}</span>` : ""}</button>
       <button id="sub-cls" class="${sub === "classif" ? "active" : ""}">Suggested tags${state.classifQueue.length ? ` <span class="badge">${state.classifQueue.length}</span>` : ""}</button>
+      <button id="sub-aud" class="${sub === "audio" ? "active" : ""}">Audio sources${state.audioQueue.length ? ` <span class="badge">${state.audioQueue.length}</span>` : ""}</button>
       <button id="sub-rem" class="${sub === "removed" ? "active" : ""}">Removed</button>
     </nav><div id="subcontent"></div>`;
   $("sub-dup").onclick = () => { state.matchesSub = "duplicates"; loadMatches(); };
   $("sub-cls").onclick = () => { state.matchesSub = "classif"; loadMatches(); };
+  $("sub-aud").onclick = () => { state.matchesSub = "audio"; loadMatches(); };
   $("sub-rem").onclick = () => { state.matchesSub = "removed"; loadMatches(); };
   if (sub === "duplicates") renderDuplicates();
   else if (sub === "classif") renderClassifications();
+  else if (sub === "audio") renderAudioSources();
   else loadRemoved();
+}
+
+// ── Audio-source review (Phase 3): discovery found a "probably right" lawful
+// source (confidence 0.55–0.91). Listen via the link, then Approve (the Mac
+// node extracts from it) or Reject (sticky — never offered again).
+function renderAudioSources() {
+  const tracks = state.audioQueue || [];
+  const pct = (v) => v == null ? "–" : Math.round(v * 100) + "%";
+  const basisLabel = {
+    artist_uploaded: "artist upload", official_preview: "official preview",
+    label_uploaded: "label upload", user_owned: "your purchase",
+    licensed_source: "licensed", public_domain: "public domain",
+    manual_approved: "you approved", unknown: "unknown origin",
+  };
+  $("subcontent").innerHTML = tracks.length
+    ? `<div class="stats">Discovery found these audio sources but isn't sure enough to use them on its own. Open one, listen, and approve or reject — approving sends it to audio analysis.</div>`
+      + tracks.map(t => `<div class="pl">
+          <div class="name">${esc(t.canonical_artist)} — ${esc(t.canonical_title)}
+            <span class="sub">${t.duration_ms ? fmtDurMs(t.duration_ms) : "?:??"}${t.personal_rating ? " · " + "★".repeat(t.personal_rating) : ""}${t.playlist_count ? ` · in ${t.playlist_count} playlist${t.playlist_count > 1 ? "s" : ""}` : ""}</span>
+          </div>
+          ${t.candidates.map(c => `<div class="audcand" id="aud-${c.candidate_id}">
+            <div class="sub" style="margin:4px 0">
+              <span class="badge" style="background:#2c3a4a;color:#9ecbe8">${esc(c.source_platform || c.source_type)}</span>
+              <span class="badge" style="background:${c.lawful_basis === "unknown" ? "#4a3a2c" : "#2c4a38"};color:${c.lawful_basis === "unknown" ? "#e8c89e" : "#a4e8be"}" title="why this source is lawful to analyse">${esc(basisLabel[c.lawful_basis] || c.lawful_basis)}</span>
+              ${esc(c.candidate_artist || "?")} — ${esc(c.candidate_title || "?")}
+              · ${c.candidate_duration_ms ? fmtDurMs(c.candidate_duration_ms) : "?:??"}
+            </div>
+            <div class="sub" style="font-size:11px">confidence <b>${pct(c.confidence)}</b> · title ${pct(c.title_similarity)} · artist ${pct(c.artist_similarity)} · duration ${c.duration_similarity ? pct(c.duration_similarity) : "unknown"}</div>
+            <div class="actions">
+              <a href="${esc(c.source_url)}" target="_blank" rel="noopener"><button>▶ Listen at source</button></a>
+              <button class="primary" onclick="decideAudioSource(${c.candidate_id}, 'approve', '${jsarg(c.lawful_basis)}')">✓ Use this source</button>
+              <button onclick="decideAudioSource(${c.candidate_id}, 'reject', '')">✕ Wrong</button>
+            </div>
+          </div>`).join("")}
+        </div>`).join("")
+    : '<div class="empty">No audio sources waiting on your verdict. Tracks land here when discovery finds a source it\'s only mostly sure about.</div>';
+}
+
+async function decideAudioSource(candidateId, action, basis) {
+  if (action === "approve" && basis === "unknown") {
+    if (!confirm("This source's origin is unverified — approving records YOUR say-so as its lawful basis (manual approval). Only do this if you checked the page and it's the artist's or label's own upload.")) return;
+  }
+  try {
+    const body = action === "reject" ? JSON.stringify({ reason: null }) : "{}";
+    await api(`/api/audio-sources/${candidateId}/${action}`, { method: "POST", body });
+    toast(action === "approve" ? "Approved — queued for audio analysis ✓" : "Rejected — won't be offered again");
+  } catch (e) { toast(e.message || "Couldn't save"); }
+  loadMatches();
 }
 
 // ── kNN classification review queue (Phase 3): "the model thinks this track

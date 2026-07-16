@@ -22,6 +22,8 @@ const state = {
   vqSuggExpanded: false, vqSuggCardPk: null,
   // Library facet: Dismissed ("Not for me") filter (R11)
   dismissed: false,
+  // Artists & labels browse (2026-07-16): Library sub-view + entity filters.
+  libView: "tracks", label: "", artist: "", labelsList: [], artistsList: [],
 };
 
 const $ = (id) => document.getElementById(id);

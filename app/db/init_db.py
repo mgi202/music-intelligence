@@ -177,6 +177,22 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         print("Migration applied: audio_features locked measurement set "
               "(onset_rate … model_predictions_json)")
 
+    # 2026-07-16 (Phase 5 foundation): follow flags on artists + labels — the
+    # hook the future release-watcher hangs on. FE toggle writes it; nothing
+    # consumes it yet.
+    ar_cols = {row["name"] for row in conn.execute("PRAGMA table_info(artists)")}
+    if ar_cols and "followed" not in ar_cols:
+        conn.execute(
+            "ALTER TABLE artists ADD COLUMN followed INTEGER NOT NULL DEFAULT 0"
+        )
+        print("Migration applied: artists.followed")
+    lb_cols = {row["name"] for row in conn.execute("PRAGMA table_info(labels)")}
+    if lb_cols and "followed" not in lb_cols:
+        conn.execute(
+            "ALTER TABLE labels ADD COLUMN followed INTEGER NOT NULL DEFAULT 0"
+        )
+        print("Migration applied: labels.followed")
+
     # 2026-07-03 (review refinement): display order for tag-profile chips —
     # functional chips render in set order, not alphabetically. Values are
     # (re)stamped by reconcile_tag_profiles on every init.

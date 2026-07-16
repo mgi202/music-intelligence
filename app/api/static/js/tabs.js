@@ -22,9 +22,10 @@ function switchView(v) {
     const tab = $("tab-" + name);
     if (tab) tab.classList.toggle("active", name === v);
   });
-  // Library-only header controls: search, facet row, summary bar.
-  // The ⟳ reload button stays visible on every tab.
-  const lib = v === "library";
+  // Library-only header controls: search, facet row, summary bar. Hidden on
+  // the Artists/Labels sub-views too (they have their own layout). The ⟳
+  // reload button stays visible on every tab.
+  const lib = v === "library" && (state.libView || "tracks") === "tracks";
   $("search").style.display = lib ? "" : "none";
   $("facetrow").style.display = lib ? "" : "none";
   $("sumbar").style.display = lib ? "" : "none";
@@ -33,7 +34,7 @@ function switchView(v) {
   $("homesearch").style.display = v === "home" ? "" : "none";
   $("playerbar").classList.toggle("hero-mode", v === "home");
   if (v === "home") { loadHome(); startHomePolling(); } else { stopHomePolling(); }
-  if (v === "library") { loadTracks(); loadSourcePlaylists(); loadGrandTotal(); renderFacetRow(); }
+  if (v === "library") { loadTracks(); loadSourcePlaylists(); loadLabelsFacet(); loadGrandTotal(); renderFacetRow(); }
   if (v === "review") enterVerdict();
   if (v === "playlists") loadPlaylists();
   if (v === "matches") loadMatches();

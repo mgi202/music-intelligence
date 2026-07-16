@@ -560,6 +560,9 @@ CREATE TABLE IF NOT EXISTS artists (
     artist_id              TEXT PRIMARY KEY,         -- 'mbid:<uuid>' or 'name:<sha16>'
     name                   TEXT NOT NULL,
     musicbrainz_artist_id  TEXT UNIQUE,
+    -- Phase 5 hook (2026-07-16): the future release-watcher polls followed
+    -- entities. The FE follow toggle writes it; nothing consumes it yet.
+    followed               INTEGER NOT NULL DEFAULT 0,
     created_at             TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS track_artists (
@@ -575,6 +578,7 @@ CREATE TABLE IF NOT EXISTS labels (
     name                   TEXT NOT NULL,
     musicbrainz_label_id   TEXT UNIQUE,
     discogs_label_id       TEXT,
+    followed               INTEGER NOT NULL DEFAULT 0,  -- Phase 5 hook, see artists
     created_at             TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS track_labels (

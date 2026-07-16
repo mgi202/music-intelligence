@@ -133,6 +133,8 @@ def list_tracks(
     tags: Optional[str] = Query(None, description="Comma-separated tags (multi-select)"),
     tag_mode: str = Query("and", pattern="^(and|or)$", description="Combine multiple tags"),
     source_playlist: Optional[str] = Query(None, description="Filter to a YTM source playlist_id"),
+    artist: Optional[str] = Query(None, description="Filter to an artist_id (track_artists)"),
+    label: Optional[str] = Query(None, description="Filter to a label_id (track_labels)"),
     pending_versions: bool = Query(False, description="Only tracks with a pending playback-version candidate"),
     rating: Optional[int] = Query(None, ge=0, le=4, description="0 = unrated"),
     untagged: bool = Query(False, description="Only tracks with no effective tags"),
@@ -189,6 +191,20 @@ def list_tracks(
             "WHERE m.track_pk = t.track_pk AND m.playlist_id = ?)"
         )
         params.append(source_playlist)
+
+    if artist:
+        conditions.append(
+            "EXISTS (SELECT 1 FROM track_artists ta "
+            "WHERE ta.track_pk = t.track_pk AND ta.artist_id = ?)"
+        )
+        params.append(artist)
+
+    if label:
+        conditions.append(
+            "EXISTS (SELECT 1 FROM track_labels tl "
+            "WHERE tl.track_pk = t.track_pk AND tl.label_id = ?)"
+        )
+        params.append(label)
 
     if pending_versions:
         conditions.append(
@@ -254,6 +270,7 @@ def list_tracks(
         tags_by_track: dict[str, list] = {pk: [] for pk in pks}
         memberships_by_track: dict[str, list] = {pk: [] for pk in pks}
         refs_by_track: dict[str, list] = {pk: [] for pk in pks}
+        labels_by_track: dict[str, list] = {pk: [] for pk in pks}
         if pks:
             placeholders = ",".join("?" * len(pks))
             # Reference exemplar state: which profiles each track is a POSITIVE
@@ -300,10 +317,24 @@ def list_tracks(
                 memberships_by_track[row["track_pk"]].append(
                     {"playlist_id": row["playlist_id"], "playlist_name": row["playlist_name"]}
                 )
+            # Record label + catalogue number (Discogs/MB capture; sparse until
+            # re-enrichment cycles fill it) — shown in the track's ⋯ sheet.
+            for row in conn.execute(
+                f"""SELECT tl.track_pk, tl.label_id, l.name, tl.catalogue_number
+                    FROM track_labels tl JOIN labels l ON l.label_id = tl.label_id
+                    WHERE tl.track_pk IN ({placeholders})
+                    ORDER BY l.name COLLATE NOCASE""",
+                pks,
+            ):
+                labels_by_track[row["track_pk"]].append({
+                    "label_id": row["label_id"], "name": row["name"],
+                    "catalogue_number": row["catalogue_number"],
+                })
         for t in tracks:
             t["tags"] = tags_by_track[t["track_pk"]]
             t["playlists"] = memberships_by_track[t["track_pk"]]
             t["reference_profiles"] = refs_by_track[t["track_pk"]]
+            t["labels"] = labels_by_track[t["track_pk"]]
 
         return {"total": total, "limit": limit, "offset": offset, "tracks": tracks}
     finally:
@@ -537,6 +568,53 @@ def reject_version_candidate(candidate_id: int):
     except ValueError:
         raise HTTPException(404, "Candidate not found")
     return {"candidate_id": candidate_id, "status": "rejected"}
+
+
+# ─────────────────────────────────────────
+# Audio-source review queue (Phase 3): human gate for the 0.55–0.91 band.
+# ─────────────────────────────────────────
+
+@app.get("/api/audio-sources/review")
+def audio_sources_review(limit: int = Query(200, le=1000)):
+    """Tracks parked at weak_audio_candidate, each with its unresolved
+    candidates (confidence desc). Rating + playlist count ride along so the
+    FE can lead with what's worth the listening effort."""
+    from app.audio import source_review
+    return {"tracks": source_review.list_review_queue(limit)}
+
+
+class AudioSourceRejection(BaseModel):
+    reason: str | None = None
+
+
+@app.post("/api/audio-sources/{candidate_id}/approve")
+def approve_audio_source(candidate_id: int):
+    """Human approval overrides the 0.92 confidence gate; an 'unknown' basis
+    becomes 'manual_approved' (an explicit human assertion — the FE confirm
+    copy surfaces it). Track → lawful_audio_candidate, claimable by the node.
+    404 unknown, 409 already decided."""
+    from app.audio import source_review
+    try:
+        return source_review.approve_candidate(candidate_id)
+    except source_review.AlreadyDecided as e:
+        raise HTTPException(409, str(e))
+    except ValueError:
+        raise HTTPException(404, "Candidate not found")
+
+
+@app.post("/api/audio-sources/{candidate_id}/reject")
+def reject_audio_source(candidate_id: int, body: AudioSourceRejection | None = None):
+    """Sticky reject — discovery never re-offers this row. The last unresolved
+    candidate falling moves the track to no_audio_source. 404 unknown, 409 if
+    already approved."""
+    from app.audio import source_review
+    try:
+        return source_review.reject_candidate(
+            candidate_id, reason=body.reason if body else None)
+    except source_review.AlreadyDecided as e:
+        raise HTTPException(409, str(e))
+    except ValueError:
+        raise HTTPException(404, "Candidate not found")
 
 
 @app.get("/api/reference/profiles")
@@ -898,6 +976,112 @@ def delete_tag(track_pk: str, tag: str):
     if not removed:
         raise HTTPException(404, "No private_manual tag with that name on this track")
     return {"removed": True}
+
+
+# ─────────────────────────────────────────
+# Artists & labels (first-class entities, surfaced 2026-07-16)
+# ─────────────────────────────────────────
+
+class FollowBody(BaseModel):
+    followed: bool = True
+
+
+@app.get("/api/artists")
+def list_artists(q: Optional[str] = Query(None), limit: int = Query(100, le=1000),
+                 followed_only: bool = Query(False)):
+    """Artists ranked by how much of them Matthias has rated/loved. Powers the
+    Library's Artists browse view; the follow flag is the Phase 5 hook."""
+    conditions, params = ["1=1"], []
+    if q:
+        conditions.append("LOWER(a.name) LIKE ?")
+        params.append(f"%{q.lower()}%")
+    if followed_only:
+        conditions.append("a.followed = 1")
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"""SELECT a.artist_id, a.name, a.followed,
+                       (a.musicbrainz_artist_id IS NOT NULL) AS has_mbid,
+                       COUNT(DISTINCT ta.track_pk) AS track_count,
+                       COUNT(DISTINCT CASE WHEN t.personal_rating IS NOT NULL
+                                           THEN ta.track_pk END) AS rated_count,
+                       COUNT(DISTINCT CASE WHEN t.personal_rating >= 3
+                                           THEN ta.track_pk END) AS loved_count
+                FROM artists a
+                JOIN track_artists ta ON ta.artist_id = a.artist_id
+                JOIN tracks t ON t.track_pk = ta.track_pk
+                WHERE {' AND '.join(conditions)}
+                GROUP BY a.artist_id
+                ORDER BY loved_count DESC, rated_count DESC,
+                         track_count DESC, a.name COLLATE NOCASE
+                LIMIT ?""",
+            params + [limit],
+        ).fetchall()
+        return {"artists": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.get("/api/labels")
+def list_labels(q: Optional[str] = Query(None), limit: int = Query(200, le=1000),
+                followed_only: bool = Query(False)):
+    """Record labels ranked the same way. Sparse for now — labels accrue from
+    Discogs as tracks (re-)enrich; the ranking gets real as coverage grows."""
+    conditions, params = ["1=1"], []
+    if q:
+        conditions.append("LOWER(l.name) LIKE ?")
+        params.append(f"%{q.lower()}%")
+    if followed_only:
+        conditions.append("l.followed = 1")
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"""SELECT l.label_id, l.name, l.followed,
+                       COUNT(DISTINCT tl.track_pk) AS track_count,
+                       COUNT(DISTINCT CASE WHEN t.personal_rating IS NOT NULL
+                                           THEN tl.track_pk END) AS rated_count,
+                       COUNT(DISTINCT CASE WHEN t.personal_rating >= 3
+                                           THEN tl.track_pk END) AS loved_count
+                FROM labels l
+                JOIN track_labels tl ON tl.label_id = l.label_id
+                JOIN tracks t ON t.track_pk = tl.track_pk
+                WHERE {' AND '.join(conditions)}
+                GROUP BY l.label_id
+                ORDER BY loved_count DESC, rated_count DESC,
+                         track_count DESC, l.name COLLATE NOCASE
+                LIMIT ?""",
+            params + [limit],
+        ).fetchall()
+        return {"labels": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+def _set_followed(table: str, id_col: str, entity_id: str, followed: bool) -> None:
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            f"UPDATE {table} SET followed = ? WHERE {id_col} = ?",
+            (1 if followed else 0, entity_id),
+        )
+        if cur.rowcount == 0:
+            raise HTTPException(404, f"{table[:-1].capitalize()} not found")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@app.post("/api/artists/{artist_id}/follow")
+def follow_artist(artist_id: str, body: FollowBody):
+    """Set/clear the follow flag — the future release-watcher reads it."""
+    _set_followed("artists", "artist_id", artist_id, body.followed)
+    return {"artist_id": artist_id, "followed": body.followed}
+
+
+@app.post("/api/labels/{label_id}/follow")
+def follow_label(label_id: str, body: FollowBody):
+    _set_followed("labels", "label_id", label_id, body.followed)
+    return {"label_id": label_id, "followed": body.followed}
 
 
 # ─────────────────────────────────────────

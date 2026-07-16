@@ -1,6 +1,12 @@
 // ── Library ──────────────────────────────
 
 async function loadTracks(append = false) {
+  // The Library hosts three browse modes (Tracks / Artists / Labels). Every
+  // existing caller funnels through here, so the dispatch lives here too.
+  if (state.view === "library" && (state.libView || "tracks") !== "tracks") {
+    loadEntities(state.libView);
+    return;
+  }
   if (!append) state.offset = 0;
   const p = new URLSearchParams({ limit: state.limit, offset: state.offset, sort: state.sort });
   if (state.q) p.set("q", state.q);
@@ -10,11 +16,72 @@ async function loadTracks(append = false) {
   if (state.tags.length) { p.set("tags", state.tags.join(",")); p.set("tag_mode", state.tagMode); }
   if (state.sourcePlaylist) p.set("source_playlist", state.sourcePlaylist);
   if (state.pendingVersions) p.set("pending_versions", "true");
+  if (state.label) p.set("label", state.label);
+  if (state.artist) p.set("artist", state.artist);
   const data = await api(`/api/tracks?${p}`);
   state.total = data.total;
   state.tracks = append ? state.tracks.concat(data.tracks) : data.tracks;
   renderLibrary();
   renderSumBar();
+}
+
+// ── Artists & Labels browse (2026-07-16) ──
+function libNavHtml() {
+  const v = state.libView || "tracks";
+  const b = (id, label) =>
+    `<button class="${v === id ? "active" : ""}" onclick="switchLibView('${id}')">${label}</button>`;
+  return `<nav class="subtabs">${b("tracks", "Tracks")}${b("artists", "Artists")}${b("labels", "Labels")}</nav>`;
+}
+
+function switchLibView(v) {
+  state.libView = v;
+  const showTracks = v === "tracks";
+  $("search").style.display = showTracks ? "" : "none";
+  $("facetrow").style.display = showTracks ? "" : "none";
+  $("sumbar").style.display = showTracks ? "" : "none";
+  if (showTracks) { loadTracks(); renderFacetRow(); }
+  else loadEntities(v);
+}
+
+async function loadEntities(kind) {
+  const data = kind === "artists"
+    ? await api("/api/artists?limit=200").catch(() => ({ artists: [] }))
+    : await api("/api/labels?limit=500").catch(() => ({ labels: [] }));
+  const items = kind === "artists" ? (data.artists || []) : (data.labels || []);
+  if (kind === "artists") state.artistsList = items; else state.labelsList = items;
+  const hint = kind === "artists"
+    ? "Ranked by how many of their tracks you loved (★★★+). Follow an artist to watch their releases once release-watching lands."
+    : "Record labels ranked by your loved tracks. Sparse for now — labels fill in as tracks re-enrich via Discogs. Follow the ones whose taste you trust.";
+  $("library").innerHTML = libNavHtml()
+    + `<div class="stats">${hint}</div>`
+    + (items.length
+        ? items.map(e => entityRow(kind, e)).join("")
+        : `<div class="empty">${kind === "artists" ? "No artists yet." : "No labels captured yet — they accrue as tracks re-enrich."}</div>`);
+}
+
+function entityRow(kind, e) {
+  const id = kind === "artists" ? e.artist_id : e.label_id;
+  const counts = `${e.loved_count ? `<b>${e.loved_count}</b> loved · ` : ""}${e.rated_count} rated · ${e.track_count} track${e.track_count === 1 ? "" : "s"}`;
+  return `<div class="pl entrow">
+    <div class="name entname" title="show these tracks in the Library" onclick="entityTracks('${kind}','${jsarg(id)}')">${esc(e.name)}
+      <span class="sub">${counts}</span></div>
+    <button class="followbtn ${e.followed ? "on" : ""}" onclick="toggleFollow('${kind}','${jsarg(id)}', ${e.followed ? 0 : 1})">${e.followed ? "★ Following" : "☆ Follow"}</button>
+  </div>`;
+}
+
+function entityTracks(kind, id) {
+  if (kind === "artists") { state.artist = id; state.label = ""; }
+  else { state.label = id; state.artist = ""; }
+  switchLibView("tracks");
+}
+
+async function toggleFollow(kind, id, followed) {
+  try {
+    await api(`/api/${kind}/${encodeURIComponent(id)}/follow`,
+              { method: "POST", body: JSON.stringify({ followed: !!followed }) });
+    toast(followed ? "Following ★ — release-watching hangs on this later" : "Unfollowed");
+  } catch (e) { toast(e.message || "Couldn't save"); }
+  loadEntities(kind);
 }
 
 function starButtons(t) {
@@ -76,8 +143,9 @@ async function restoreDismissed(pk) {
 function renderLibrary() {
   $("trackcount").textContent = state.total ? `· ${state.total}` : "";
   const el = $("library");
-  if (!state.tracks.length) { el.innerHTML = '<div class="empty">No tracks match.</div>'; return; }
-  el.innerHTML = state.tracks.map(t => trackCard(t)).join("")
+  if (!state.tracks.length) { el.innerHTML = libNavHtml() + '<div class="empty">No tracks match.</div>'; return; }
+  el.innerHTML = libNavHtml()
+    + state.tracks.map(t => trackCard(t)).join("")
     + (state.tracks.length < state.total
         ? `<button class="loadmore" onclick="more()">Load more (${state.total - state.tracks.length} remaining)</button>` : "");
 }
@@ -119,7 +187,16 @@ async function trackMenu(pk) {
     ? `<div class="menuhint">Reference examples (from your tags)</div>${refRows}<div class="menusep"></div>`
     : "";
 
+  // Record label + catalogue number when enrichment captured them (sparse
+  // until re-enrichment cycles fill the label tables).
+  const labelSection = (t.labels || []).length
+    ? `<div class="menuhint">${t.labels.map(l =>
+        `Label: ${esc(l.name)}${l.catalogue_number ? " · " + esc(l.catalogue_number) : ""}`
+      ).join("<br>")}</div><div class="menusep"></div>`
+    : "";
+
   bg.innerHTML = `<div class="sheet">
+    ${labelSection}
     ${refSection}
     <button onclick="versionDialog('${pk}');this.closest('.menu').remove()">
       🔎 ${t.playback_video_id ? "Change playback version" : "Find extended / video version"}${
