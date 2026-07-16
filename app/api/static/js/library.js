@@ -341,10 +341,13 @@ async function addTag(pk) {
   });
 }
 
-// Shared tag-modal core — Library's + tag and Review's + tag both call this so
-// the family-gated profile palette and free-text escape hatch stay in one place.
-// The profile vocabulary = your tap-palette. Recognition, not recall: tap a chip
-// to add/remove; no spelling drift, guaranteed to map to a profile.
+// Shared tag-modal core — Library's + tag, the hero player's + tag and Review's
+// + tag all call this so the family-gated profile palette and free-text escape
+// hatch stay in one place. The profile vocabulary = your tap-palette.
+// Recognition, not recall — plus a search box (Matthias, 15 Jul) so 60+
+// subgenres never need cmd+F again. Search filters every layer live and cuts
+// across the family gate; Enter toggles the first hit, or adds the query as a
+// free-text tag when nothing matches.
 // `t` is the live track object (its `.tags` array is mutated in place). Hooks:
 //   opts.onChange(tag, added, profile|null) — after each successful apply/remove
 //   opts.onClose()                          — once on dismiss, only if changed
@@ -354,6 +357,14 @@ async function openTagModal(pk, t, opts = {}) {
     try { state.profileList = (await api("/api/reference/profiles")).profiles || []; }
     catch (e) { state.profileList = []; }
   }
+  // Self-hydrate (15 Jul fix): callers pass differently-shaped track objects —
+  // the hero player's findTrack() often lacks tags, so the family gate saw "no
+  // family" and hid subgenres there while Review showed them. Fetch the
+  // effective tags ourselves; never trust the caller for gating.
+  try {
+    const fresh = await api(`/api/tracks/${encodeURIComponent(pk)}`);
+    if (fresh && Array.isArray(fresh.tags)) t.tags = fresh.tags;
+  } catch (e) {}
   const profileByName = {};
   state.profileList.forEach(p => { profileByName[p.tag_name.toLowerCase()] = p; });
   const manual = new Set((t.tags || [])
@@ -371,21 +382,23 @@ async function openTagModal(pk, t, opts = {}) {
     if (opts.onChange) opts.onChange(tag, added, profileByName[key] || null);
   };
 
-  const dlOpts = state.allTags.map(x => `<option value="${esc(x.tag)}">`).join("");
   const bg = document.createElement("div");
   bg.className = "modal-bg";
   const close = () => {
+    document.removeEventListener("keydown", escClose, true);
     bg.remove();
     if (changed && opts.onClose) opts.onClose();
   };
+  const escClose = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
+  document.addEventListener("keydown", escClose, true);
   bg.onclick = (ev) => { if (ev.target === bg) close(); };
 
-  bg.innerHTML = `<div class="modal">
+  bg.innerHTML = `<div class="modal tag-modal">
     <h2>Tag track</h2>
+    <input id="tag-search" placeholder="Search tags — Enter toggles the first match, or adds free-text"
+           autocomplete="off" autocapitalize="none" spellcheck="false">
+    <div id="tag-selected" class="tag-selected"></div>
     <div id="palette"></div>
-    <div class="hint" style="margin-top:10px">Or type a free-text tag (descriptive only — won't teach a profile):</div>
-    <input id="tag-input" list="tag-suggest" placeholder="e.g. raw, hardware-jam" autocomplete="off" autocapitalize="none">
-    <datalist id="tag-suggest">${dlOpts}</datalist>
     <div class="btnrow">
       <button class="primary" id="tag-done">Done</button>
     </div>
@@ -413,16 +426,36 @@ async function openTagModal(pk, t, opts = {}) {
     .map(g => (g.tag || "").toLowerCase()).filter(x => familyNames.has(x)));
   let showAllSubs = false;
 
+  // Search state (15 Jul): a non-empty query filters chips in EVERY layer by
+  // substring and cuts across the family gate — searching is explicit intent,
+  // so gating out of sight would just feel broken. Enter toggles the first
+  // visible match; no vocab match → Enter adds the query as free-text.
+  let query = "";
+  const selectedBox = bg.querySelector("#tag-selected");
+  const renderSelected = () => {
+    selectedBox.innerHTML = manual.size
+      ? [...manual].sort().map(k =>
+          `<button class="chip active" data-tag="${esc(k)}" title="tap to remove">✓ ${esc(k)}</button>`).join("")
+      : '<span class="hint">No manual tags yet — tap chips below or search.</span>';
+  };
+
   const renderPalette = () => {
+    renderSelected();
+    const q = query.trim().toLowerCase();
     const activeFams = new Set([...trackFams, ...[...manual].filter(x => familyNames.has(x))]);
-    palette.innerHTML = LAYER_ORDER.filter(l => byLayer[l]).map(layer => {
-      let items = byLayer[layer];
+    let firstHit = null;
+    const sections = LAYER_ORDER.filter(l => byLayer[l]).map(layer => {
+      // A–Z within each layer — predictable scanning (15 Jul).
+      let items = [...byLayer[layer]].sort((a, b) => a.tag_name.localeCompare(b.tag_name));
       let extra = "";
-      if (layer === "subgenre") {
+      if (q) {
+        items = items.filter(p => p.tag_name.toLowerCase().includes(q));
+        if (!items.length) return "";               // hide empty layers while searching
+      } else if (layer === "subgenre") {
         if (!activeFams.size && !showAllSubs) {
-          return `<div class="playlbl">${LAYER_LABEL[layer]}</div>
+          return `<div class="tag-sec"><div class="playlbl">${LAYER_LABEL[layer]}</div>
             <div class="hint">Pick a family above to see its styles —
-              <a href="#" id="subs-showall" style="color:var(--accent)">or show all styles</a></div>`;
+              <a href="#" id="subs-showall" style="color:var(--accent)">or show all styles</a></div></div>`;
         }
         if (!showAllSubs) {
           items = items.filter(p => manual.has(p.tag_name.toLowerCase())
@@ -435,13 +468,24 @@ async function openTagModal(pk, t, opts = {}) {
       }
       const chips = items.map(p => {
         const on = manual.has(p.tag_name.toLowerCase());
+        if (q && !firstHit && !on) firstHit = p.tag_name;
         return `<button class="chip ${on ? "active" : ""}" data-tag="${esc(p.tag_name)}">${on ? "✓ " : ""}${esc(p.tag_name)}</button>`;
       }).join("");
       // Grow the vocabulary in place — no trip to the Tags tab (2026-07-06).
-      const newBtn = MANAGED_LAYERS.includes(layer)
+      const newBtn = !q && MANAGED_LAYERS.includes(layer)
         ? `<button class="chip newprof" data-newlayer="${esc(layer)}" title="create a new ${layer} tag">+ new</button>` : "";
-      return `<div class="playlbl">${LAYER_LABEL[layer] || layer}</div><div class="palette-row">${chips}${newBtn}${extra}</div>`;
-    }).join("") || '<div class="hint">No profiles seeded yet.</div>';
+      return `<div class="tag-sec"><div class="playlbl">${LAYER_LABEL[layer] || layer}</div><div class="palette-row">${chips}${newBtn}${extra}</div></div>`;
+    }).filter(Boolean).join("");
+    // Free-text: merged into the search box. Only offered when the query
+    // matches no vocab chip exactly (descriptive only — won't teach a profile).
+    const exact = q && state.profileList.some(p => p.tag_name.toLowerCase() === q);
+    const freeRow = q && !exact
+      ? `<div class="tag-sec"><div class="playlbl">Free-text</div>
+           <button class="chip newprof" data-free="${esc(query.trim())}">↵ add “${esc(query.trim())}” as free-text (descriptive only — won't teach a profile)</button></div>`
+      : "";
+    palette.innerHTML = (sections + freeRow)
+      || '<div class="hint">No profiles seeded yet.</div>';
+    palette.dataset.firstHit = firstHit || "";
     const sa = palette.querySelector("#subs-showall");
     if (sa) sa.onclick = (e) => { e.preventDefault(); showAllSubs = !showAllSubs; renderPalette(); };
   };
@@ -457,12 +501,9 @@ async function openTagModal(pk, t, opts = {}) {
     }});
   };
 
-  palette.onclick = async (ev) => {
-    const nb = ev.target.closest(".newprof");
-    if (nb) { openNewProfile(nb.dataset.newlayer); return; }
-    const btn = ev.target.closest(".chip"); if (!btn) return;
-    const tag = btn.dataset.tag, key = tag.toLowerCase();
-    btn.disabled = true;
+  const toggleTag = async (tag, btn) => {
+    const key = tag.toLowerCase();
+    if (btn) btn.disabled = true;
     try {
       if (manual.has(key)) {
         await api(`/api/tracks/${pk}/tags/${encodeURIComponent(tag)}`, { method: "DELETE" });
@@ -472,18 +513,37 @@ async function openTagModal(pk, t, opts = {}) {
         manual.add(key); notifyChange(tag, true); toast(`Tagged: ${key}`);
       }
       renderPalette();
-    } catch (e) { toast("Failed — try again"); btn.disabled = false; }
+    } catch (e) { toast("Failed — try again"); if (btn) btn.disabled = false; }
   };
 
-  // ── Free-text escape hatch ───────────────────────────────────────────────
-  const input = bg.querySelector("#tag-input");
-  const submitFree = async () => {
-    const tag = input.value.trim(); if (!tag) return;
-    await api(`/api/tracks/${pk}/tags`, { method: "POST", body: JSON.stringify({ tag }) });
-    manual.add(tag.toLowerCase()); notifyChange(tag, true); input.value = "";
-    renderPalette(); toast(`Tagged: ${tag.toLowerCase()}`);
+  const onChipClick = async (ev) => {
+    const nb = ev.target.closest(".newprof");
+    if (nb && nb.dataset.newlayer) { openNewProfile(nb.dataset.newlayer); return; }
+    if (nb && nb.dataset.free) {
+      await toggleTag(nb.dataset.free, nb);
+      input.value = ""; query = ""; renderPalette(); input.focus();
+      return;
+    }
+    const btn = ev.target.closest(".chip"); if (!btn || !btn.dataset.tag) return;
+    await toggleTag(btn.dataset.tag, btn);
   };
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") submitFree(); });
+  palette.onclick = onChipClick;
+  selectedBox.onclick = onChipClick;
+
+  // ── Search box: live filter + Enter-to-toggle + free-text fallback ──────
+  const input = bg.querySelector("#tag-search");
+  input.oninput = () => { query = input.value; renderPalette(); };
+  input.addEventListener("keydown", async (e) => {
+    if (e.key !== "Enter") return;
+    const q = input.value.trim(); if (!q) return;
+    const first = palette.dataset.firstHit;
+    await toggleTag(first || q, null);          // vocab hit, else free-text
+    input.value = ""; query = ""; renderPalette(); input.focus();
+  });
+  // Desktop-first: straight into typing. On touch, skip so the keyboard
+  // doesn't shove the palette off-screen.
+  if (matchMedia("(pointer: fine)").matches) input.focus();
+
   bg.querySelector("#tag-done").onclick = close;
 }
 

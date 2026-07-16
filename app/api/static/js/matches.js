@@ -158,8 +158,8 @@ function vocabProfilesHtml(profiles) {
     const active = ps.filter(p => !p.retired_at).length;
     const addBtn = managed
       ? ` <button class="vbtn vpadd" onclick="vpAdd('${layer}')" title="add a new ${layer} profile — it appears in Review immediately">+ add</button>` : "";
-    return `<div class="vsec">${layer} · ${active}${addBtn}</div>
-      <div class="vprof">${ps.map(p => vpChipHtml(p, managed)).join("")}</div>`;
+    return `<div class="vlayerbox"><div class="vsec">${layer} · ${active}${addBtn}</div>
+      <div class="vprof">${ps.map(p => vpChipHtml(p, managed)).join("")}</div></div>`;
   }).join("");
 }
 
@@ -279,19 +279,28 @@ async function loadTags() {
     api("/api/vocab-suggestions"), api("/api/vocabulary/profiles"), api("/api/vocabulary"),
   ]);
   state.vocab = vocab; state.vocabProfiles = profiles;
+  // Each top-level area lives in its own .tagcard (Matthias, 15 Jul: sections
+  // flowed into one another) — suggestions / vocabulary / raw tags are visually
+  // separate boxes with their own headers.
   $("tags").innerHTML =
-    `${sugg.suggestions.length ? `<div class="vsec">Suggested subgenres · ${sugg.suggestions.length}</div>
-        <div class="stats">Your library's coverage earned these candidate slots. ✓ Add makes it a real subgenre; ✕ hides it forever.</div>
-        <div id="sugglist">${suggRowsHtml(sugg.suggestions)}</div>`
-      : '<div class="vsec">Suggested subgenres</div><div class="stats" id="sugglist-empty">None pending. New candidates appear as your library and tagging grow.</div>'}
-     <button class="scanbtn" onclick="rescanVocab(this)">⟳ Scan library for candidates now</button>
-     <div class="vsec">Vocabulary</div>
-     <div class="stats">The tagging vocabulary, grouped by layer. Personal, subgenre and era are yours to manage — add, rename, retire. Functional stays code-locked (hotkeys and set order depend on it).</div>
-     ${vocabProfilesHtml(profiles)}
-     <div class="vsec">All raw tags</div>
-     <div class="stats">${state.vocab.length} distinct tags · "Hide" removes a tag everywhere; "Alias" merges a spelling variant into another tag.</div>
-     <input class="vocabsearch" id="vocabsearch" placeholder="Filter tags…" autocomplete="off" autocapitalize="none">
-     <div id="vocablist">${vocabRowsHtml(state.vocab.slice(0, 250))}</div>`;
+    `<div class="tagcard">
+       ${sugg.suggestions.length ? `<div class="vsec">Suggested subgenres · ${sugg.suggestions.length}</div>
+          <div class="stats">Your library's coverage earned these candidate slots. ✓ Add makes it a real subgenre; ✕ hides it forever.</div>
+          <div id="sugglist">${suggRowsHtml(sugg.suggestions)}</div>`
+        : '<div class="vsec">Suggested subgenres</div><div class="stats" id="sugglist-empty">None pending. New candidates appear as your library and tagging grow.</div>'}
+       <button class="scanbtn" onclick="rescanVocab(this)">⟳ Scan library for candidates now</button>
+     </div>
+     <div class="tagcard">
+       <div class="vsec">Vocabulary</div>
+       <div class="stats">The tagging vocabulary, grouped by layer. Personal, subgenre and era are yours to manage — add, rename, retire. Functional stays code-locked (hotkeys and set order depend on it).</div>
+       ${vocabProfilesHtml(profiles)}
+     </div>
+     <div class="tagcard">
+       <div class="vsec">All raw tags</div>
+       <div class="stats">${state.vocab.length} distinct tags · "Hide" removes a tag everywhere; "Alias" merges a spelling variant into another tag.</div>
+       <input class="vocabsearch" id="vocabsearch" placeholder="Filter tags…" autocomplete="off" autocapitalize="none">
+       <div id="vocablist">${vocabRowsHtml(state.vocab.slice(0, 250))}</div>
+     </div>`;
   $("vocabsearch").oninput = (e) => {
     const f = e.target.value.trim().toLowerCase();
     const rows = (f ? state.vocab.filter(v => v.tag.includes(f)) : state.vocab).slice(0, 250);

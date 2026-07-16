@@ -1918,14 +1918,26 @@ class ReferenceLabelRequest(BaseModel):
 
 @app.get("/api/reference/candidates")
 def reference_candidates(profile_id: str, limit: int = Query(30, ge=1, le=100)):
-    """Unlabelled candidates for a profile, ordered by training value:
-    context-term/tag matches first (likely positives), then rated tracks,
-    newest first. Committed-away tracks and existing exemplars are excluded."""
+    """Unlabelled candidates ordered by training value FOR THIS PROFILE.
+
+    Rework (15 Jul): the old tag-match→rating→newest ordering collapsed to the
+    same generic list for every profile without tag matches. Two rankings now:
+
+    1. Vector path — the profile has ≥1 positive exemplar with a CLAP vector:
+       Qdrant retrieval around the positive centroid, then serve alternating
+       LIKELY POSITIVES (top of retrieval — fast route to 15 yes + 3 artists)
+       and BOUNDARY CASES (tail of retrieval — the near-misses that teach the
+       decision line). Shortfall tops up from the fallback ranking.
+    2. Metadata fallback — graded per-profile term overlap (COUNT of matching
+       effective tags across name + context terms + parent family), then
+       rating, vector presence, newest.
+
+    Committed-away tracks and existing exemplars are always excluded."""
     conn = get_connection()
     try:
         prof = conn.execute(
-            "SELECT profile_id, tag_name, context_terms_json FROM tag_profiles "
-            "WHERE profile_id = ?", (profile_id,),
+            "SELECT profile_id, tag_name, context_terms_json, parent_family "
+            "FROM tag_profiles WHERE profile_id = ?", (profile_id,),
         ).fetchone()
         if prof is None:
             raise HTTPException(404, "Profile not found")
@@ -1935,31 +1947,91 @@ def reference_candidates(profile_id: str, limit: int = Query(30, ge=1, le=100)):
                 terms += [t.lower() for t in json.loads(prof["context_terms_json"])]
             except (TypeError, ValueError):
                 pass
+        if prof["parent_family"]:
+            terms.append(prof["parent_family"].lower())
+        terms = list(dict.fromkeys(terms))
+
+        labelled = {r["track_pk"] for r in conn.execute(
+            "SELECT track_pk FROM reference_track_labels WHERE profile_id = ?",
+            (profile_id,))}
+
+        # ── 1. Vector path ────────────────────────────────────────────────
+        ranked_pks: list[str] = []
+        pos_pks = [r["track_pk"] for r in conn.execute(
+            "SELECT track_pk FROM reference_track_labels "
+            "WHERE profile_id = ? AND label_type = 'positive'", (profile_id,))]
+        if pos_pks:
+            from app.audio import vectors
+            try:
+                pos_vecs = list(vectors.load_vectors(pos_pks).values())
+                if pos_vecs:
+                    dim = len(pos_vecs[0])
+                    centroid = [sum(v[i] for v in pos_vecs) / len(pos_vecs)
+                                for i in range(dim)]
+                    hits = [h for h in vectors.search_similar(
+                                centroid, limit=max(limit * 4, 80))
+                            if h["track_pk"] and h["track_pk"] not in labelled]
+                    # Front half ≈ likely positives, back half ≈ boundary.
+                    # Interleave so every screenful mixes cheap yes-taps with
+                    # the labels that actually move the decision line.
+                    half = len(hits) // 2
+                    likely, boundary = hits[:half], hits[half:]
+                    for i in range(max(len(likely), len(boundary))):
+                        if i < len(likely):
+                            ranked_pks.append(likely[i]["track_pk"])
+                        if i < len(boundary):
+                            ranked_pks.append(boundary[i]["track_pk"])
+                    ranked_pks = ranked_pks[:limit]
+            except Exception:  # noqa: BLE001 — Qdrant down ⇒ fallback ranking
+                ranked_pks = []
+
         placeholders = ",".join("?" * len(terms))
-        rows = conn.execute(
-            f"""SELECT t.track_pk, t.canonical_title, t.canonical_artist,
+        base_cols = f"""t.track_pk, t.canonical_title, t.canonical_artist,
                        t.personal_rating, t.ytm_track_id, t.playback_video_id,
-                       EXISTS (SELECT 1 FROM effective_track_tags e
-                               WHERE e.track_pk = t.track_pk
-                                 AND e.tag IN ({placeholders})) AS tag_match,
+                       (SELECT COUNT(*) FROM effective_track_tags e
+                        WHERE e.track_pk = t.track_pk
+                          AND e.tag IN ({placeholders})) AS term_hits,
                        EXISTS (SELECT 1 FROM audio_features af
                                WHERE af.track_pk = t.track_pk
-                                 AND af.clap_vector_json IS NOT NULL) AS has_vector
-                FROM tracks t
-                WHERE t.missing_since IS NULL
-                  AND NOT EXISTS (SELECT 1 FROM reference_track_labels r
-                                  WHERE r.track_pk = t.track_pk
-                                    AND r.profile_id = ?)
-                ORDER BY tag_match DESC,
-                         (t.personal_rating IS NULL) ASC,
-                         t.personal_rating DESC,
-                         has_vector DESC,
-                         t.created_at DESC
-                LIMIT ?""",
-            (*terms, profile_id, limit),
-        ).fetchall()
+                                 AND af.clap_vector_json IS NOT NULL) AS has_vector"""
+
+        out: list[dict] = []
+        if ranked_pks:
+            ph = ",".join("?" * len(ranked_pks))
+            rows = conn.execute(
+                f"""SELECT {base_cols} FROM tracks t
+                    WHERE t.track_pk IN ({ph}) AND t.missing_since IS NULL""",
+                (*terms, *ranked_pks),
+            ).fetchall()
+            by_pk = {r["track_pk"]: dict(r) for r in rows}
+            out = [by_pk[pk] for pk in ranked_pks if pk in by_pk]
+
+        # ── 2. Fallback / top-up: graded term overlap for THIS profile ────
+        if len(out) < limit:
+            have = {c["track_pk"] for c in out}
+            extra_ph = ",".join("?" * len(have)) if have else ""
+            not_in = f"AND t.track_pk NOT IN ({extra_ph})" if have else ""
+            rows = conn.execute(
+                f"""SELECT {base_cols} FROM tracks t
+                    WHERE t.missing_since IS NULL
+                      AND NOT EXISTS (SELECT 1 FROM reference_track_labels r
+                                      WHERE r.track_pk = t.track_pk
+                                        AND r.profile_id = ?)
+                      {not_in}
+                    ORDER BY term_hits DESC,
+                             (t.personal_rating IS NULL) ASC,
+                             t.personal_rating DESC,
+                             has_vector DESC,
+                             t.created_at DESC
+                    LIMIT ?""",
+                (*terms, profile_id, *have, limit - len(out)),
+            ).fetchall()
+            out += [dict(r) for r in rows]
+
+        for c in out:
+            c["tag_match"] = 1 if c.pop("term_hits", 0) else 0
         return {"profile_id": profile_id, "tag_name": prof["tag_name"],
-                "candidates": [dict(r) for r in rows]}
+                "candidates": out}
     finally:
         conn.close()
 
