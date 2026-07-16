@@ -97,6 +97,46 @@ def test_manual_tag_outranks_public_in_type(db):
     assert rows[0]["tag_type"] == "private_manual"
 
 
+# ── manual tag writes honour the alias fold (16 Jul: disco-funk 404) ─────────
+# The UI toggles chips by their EFFECTIVE (post-alias) name; writes must land
+# on the same name or a remove-by-displayed-name finds nothing.
+
+def test_apply_tag_stores_canonical_name(db):
+    from app.tags.tag_manager import apply_tag
+    with db_conn(db) as c:
+        insert_track(c, "t1")
+        c.execute("INSERT INTO tag_vocabulary (tag, alias_to) VALUES ('funky soul', 'boogie-funk')")
+    assert apply_tag("t1", "funky soul", db_path=db) is True
+    with db_conn(db) as c:
+        rows = [r["tag"] for r in c.execute(
+            "SELECT tag FROM track_tags WHERE track_pk='t1' AND tag_type='private_manual'")]
+    assert rows == ["boogie-funk"]
+    # Re-applying via either name is the same tag → idempotent no-op.
+    assert apply_tag("t1", "boogie-funk", db_path=db) is False
+    assert apply_tag("t1", "funky soul", db_path=db) is False
+
+
+def test_remove_tag_by_effective_name_deletes_aliased_row(db):
+    from app.tags.tag_manager import remove_tag
+    with db_conn(db) as c:
+        insert_track(c, "t1")
+        # A pre-fix row stored under the alias SOURCE, displayed as the target.
+        _tag(c, "t1", "funky soul", "manual", "private_manual")
+        c.execute("INSERT INTO tag_vocabulary (tag, alias_to) VALUES ('funky soul', 'boogie-funk')")
+    assert _eff(db, "t1") == ["boogie-funk"]
+    assert remove_tag("t1", "boogie-funk", db_path=db) is True
+    assert _eff(db, "t1") == []
+
+
+def test_apply_remove_roundtrip_without_alias(db):
+    from app.tags.tag_manager import apply_tag, remove_tag
+    with db_conn(db) as c:
+        insert_track(c, "t1")
+    assert apply_tag("t1", "dub techno", db_path=db) is True
+    assert remove_tag("t1", "dub techno", db_path=db) is True
+    assert remove_tag("t1", "dub techno", db_path=db) is False
+
+
 # ── eligibility honours curation ─────────────────────────────────────────────
 
 def _make_rule(conn, rule_id="r1", tags_any=None):

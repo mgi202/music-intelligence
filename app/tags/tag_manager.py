@@ -34,6 +34,20 @@ def _reconcile_references(track_pk: str, db_path: str | None) -> None:
         pass
 
 
+def _fold_alias(conn, tag: str) -> str:
+    """Resolve a tag through the vocabulary's alias map (single hop, chains are
+    flattened at write time) — the same fold effective_track_tags applies on
+    read. Writes must store the canonical name, or a stored row and its
+    displayed name diverge and a later remove-by-displayed-name finds nothing
+    (the disco-funk 404, 16 Jul)."""
+    row = conn.execute(
+        "SELECT LOWER(alias_to) AS canon FROM tag_vocabulary "
+        "WHERE LOWER(tag) = ? AND alias_to IS NOT NULL AND alias_to != ''",
+        (tag,),
+    ).fetchone()
+    return row["canon"] if row else tag
+
+
 def apply_tag(
     track_pk: str,
     tag: str,
@@ -58,6 +72,8 @@ def apply_tag(
             "SELECT 1 FROM tracks WHERE track_pk = ?", (track_pk,)
         ).fetchone():
             raise ValueError(f"Track not found: {track_pk}")
+
+        tag = _fold_alias(conn, tag)
 
         existing = conn.execute("""
             SELECT id FROM track_tags
@@ -98,9 +114,18 @@ def remove_tag(
     tag = tag.lower().strip()
 
     with db_conn(db_path) as conn:
+        # The UI removes by the tag's EFFECTIVE (post-alias) name, but older
+        # rows may be stored under an alias source (e.g. manual "funk / soul"
+        # displayed as "disco-funk"). Delete every manual row that folds to
+        # the requested name, mirroring the effective_track_tags view.
+        tag = _fold_alias(conn, tag)
         result = conn.execute("""
             DELETE FROM track_tags
-            WHERE track_pk = ? AND tag = ? AND tag_type = 'private_manual'
+            WHERE track_pk = ? AND tag_type = 'private_manual'
+              AND LOWER(COALESCE(NULLIF(
+                    (SELECT v.alias_to FROM tag_vocabulary v
+                     WHERE LOWER(v.tag) = LOWER(track_tags.tag)), ''),
+                    track_tags.tag)) = ?
         """, (track_pk, tag))
         removed = result.rowcount > 0
 
