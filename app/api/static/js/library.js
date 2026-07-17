@@ -18,6 +18,7 @@ async function loadTracks(append = false) {
   if (state.pendingVersions) p.set("pending_versions", "true");
   if (state.label) p.set("label", state.label);
   if (state.artist) p.set("artist", state.artist);
+  if (state.mineOnly) p.set("tag_source", "manual");
   const data = await api(`/api/tracks?${p}`);
   state.total = data.total;
   state.tracks = append ? state.tracks.concat(data.tracks) : data.tracks;
@@ -30,7 +31,10 @@ function libNavHtml() {
   const v = state.libView || "tracks";
   const b = (id, label) =>
     `<button class="${v === id ? "active" : ""}" onclick="switchLibView('${id}')">${label}</button>`;
-  return `<nav class="subtabs">${b("tracks", "Tracks")}${b("artists", "Artists")}${b("labels", "Labels")}</nav>`;
+  // Entity views hide the facet row, so the Mine-only toggle lives here for
+  // them — same state, same handler as the facet-row button in Tracks.
+  const mine = v === "tracks" ? "" : mineBtnHtml();
+  return `<nav class="subtabs">${b("tracks", "Tracks")}${b("artists", "Artists")}${b("labels", "Labels")}${mine}</nav>`;
 }
 
 function switchLibView(v) {
@@ -44,19 +48,23 @@ function switchLibView(v) {
 }
 
 async function loadEntities(kind) {
+  const mine = state.mineOnly ? "&tag_source=manual" : "";
   const data = kind === "artists"
-    ? await api("/api/artists?limit=200").catch(() => ({ artists: [] }))
-    : await api("/api/labels?limit=500").catch(() => ({ labels: [] }));
+    ? await api(`/api/artists?limit=200${mine}`).catch(() => ({ artists: [] }))
+    : await api(`/api/labels?limit=500${mine}`).catch(() => ({ labels: [] }));
   const items = kind === "artists" ? (data.artists || []) : (data.labels || []);
   if (kind === "artists") state.artistsList = items; else state.labelsList = items;
-  const hint = kind === "artists"
+  const hint = (state.mineOnly ? "👤 Mine only — counting just your manually-tagged or rated tracks. " : "")
+    + (kind === "artists"
     ? "Ranked by how many of their tracks you loved (★★★+). Follow an artist to watch their releases once release-watching lands."
-    : "Record labels ranked by your loved tracks. Sparse for now — labels fill in as tracks re-enrich via Discogs. Follow the ones whose taste you trust.";
+    : "Record labels ranked by your loved tracks. Sparse for now — labels fill in as tracks re-enrich via Discogs. Follow the ones whose taste you trust.");
   $("library").innerHTML = libNavHtml()
     + `<div class="stats">${hint}</div>`
     + (items.length
         ? items.map(e => entityRow(kind, e)).join("")
-        : `<div class="empty">${kind === "artists" ? "No artists yet." : "No labels captured yet — they accrue as tracks re-enrich."}</div>`);
+        : `<div class="empty">${state.mineOnly
+            ? "Nothing here under Mine only — no " + (kind === "artists" ? "artists" : "labels") + " with manually-tagged or rated tracks yet."
+            : kind === "artists" ? "No artists yet." : "No labels captured yet — they accrue as tracks re-enrich."}</div>`);
 }
 
 function entityRow(kind, e) {

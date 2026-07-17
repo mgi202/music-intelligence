@@ -132,6 +132,10 @@ def list_tracks(
     tag: Optional[str] = Query(None, description="Single tag (legacy)"),
     tags: Optional[str] = Query(None, description="Comma-separated tags (multi-select)"),
     tag_mode: str = Query("and", pattern="^(and|or)$", description="Combine multiple tags"),
+    tag_source: Optional[str] = Query(None, pattern="^(manual)$",
+                                      description="manual = 'Mine only': tag filters match only "
+                                                  "hand-applied tags, and the list restricts to "
+                                                  "manually-tagged or rated tracks"),
     source_playlist: Optional[str] = Query(None, description="Filter to a YTM source playlist_id"),
     artist: Optional[str] = Query(None, description="Filter to an artist_id (track_artists)"),
     label: Optional[str] = Query(None, description="Filter to a label_id (track_labels)"),
@@ -163,7 +167,11 @@ def list_tracks(
 
     # Tag filter — single (?tag=) or multi (?tags=a,b&tag_mode=and|or), evaluated
     # against effective_track_tags so hidden/rejected/aliased tags behave exactly
-    # as the user sees them.
+    # as the user sees them. Under tag_source=manual ("Mine only") a chip means
+    # "tracks *I* put in this style": only private_manual rows (type_rank 0)
+    # count, so public/model tags can't flood a genre view.
+    mine = tag_source == "manual"
+    manual_and = " AND tt.type_rank = 0" if mine else ""
     tag_list: list[str] = []
     if tags:
         tag_list = [s.strip().lower() for s in tags.split(",") if s.strip()]
@@ -174,16 +182,27 @@ def list_tracks(
             placeholders = ",".join("?" * len(tag_list))
             conditions.append(
                 f"EXISTS (SELECT 1 FROM effective_track_tags tt "
-                f"WHERE tt.track_pk = t.track_pk AND tt.tag IN ({placeholders}))"
+                f"WHERE tt.track_pk = t.track_pk AND tt.tag IN ({placeholders})"
+                f"{manual_and})"
             )
             params.extend(tag_list)
         else:  # and — track must carry every selected tag
             for tg in tag_list:
                 conditions.append(
-                    "EXISTS (SELECT 1 FROM effective_track_tags tt "
-                    "WHERE tt.track_pk = t.track_pk AND tt.tag = ?)"
+                    f"EXISTS (SELECT 1 FROM effective_track_tags tt "
+                    f"WHERE tt.track_pk = t.track_pk AND tt.tag = ?{manual_and})"
                 )
                 params.append(tg)
+
+    if mine:
+        # The base "Mine only" restriction: the track carries at least one
+        # hand-applied tag OR a personal rating — Matthias's own curation in
+        # isolation. Composes with the rating/tag filters above (AND).
+        conditions.append(
+            "(EXISTS (SELECT 1 FROM effective_track_tags tt "
+            "WHERE tt.track_pk = t.track_pk AND tt.type_rank = 0) "
+            "OR t.personal_rating IS NOT NULL)"
+        )
 
     if source_playlist:
         conditions.append(
@@ -707,15 +726,19 @@ def verdict_uncommit(track_pk: str):
 
 
 @app.get("/api/tags")
-def list_all_tags():
+def list_all_tags(tag_source: Optional[str] = Query(None, pattern="^(manual)$",
+                                                    description="manual = count only hand-applied tags")):
     """Distinct EFFECTIVE tags with track counts. Powers the facet dropdowns and
     the autocomplete — hidden/aliased tags are already collapsed out by the view.
     `layer` = the tag's taxonomy layer when it maps to a profile (family/
-    subgenre/functional/personal), else 'other' (free-text descriptive tags)."""
+    subgenre/functional/personal), else 'other' (free-text descriptive tags).
+    Under tag_source=manual only private_manual applications are listed and
+    counted, so the facet numbers match the 'Mine only' Library view."""
+    where = "WHERE e.type_rank = 0" if tag_source == "manual" else ""
     conn = get_connection()
     try:
         rows = conn.execute(
-            """SELECT e.tag,
+            f"""SELECT e.tag,
                       COUNT(DISTINCT e.track_pk) AS n,
                       CASE MIN(e.type_rank)
                           WHEN 0 THEN 'private_manual'
@@ -726,6 +749,7 @@ def list_all_tags():
                       COALESCE(MIN(p.taxonomy_layer), 'other') AS layer
                FROM effective_track_tags e
                LEFT JOIN tag_profiles p ON LOWER(p.tag_name) = e.tag
+               {where}
                GROUP BY e.tag
                ORDER BY n DESC, e.tag"""
         ).fetchall()
@@ -986,17 +1010,33 @@ class FollowBody(BaseModel):
     followed: bool = True
 
 
+# "Mine only" (2026-07-17): a track counts as Matthias's own curation when it
+# carries at least one hand-applied tag (effective_track_tags.type_rank 0 =
+# private_manual) or a personal rating. Shared by the artist/label rankings;
+# /api/tracks inlines the same predicate.
+_MINE_TRACK_COND = (
+    "(EXISTS (SELECT 1 FROM effective_track_tags tt "
+    "WHERE tt.track_pk = t.track_pk AND tt.type_rank = 0) "
+    "OR t.personal_rating IS NOT NULL)"
+)
+
+
 @app.get("/api/artists")
 def list_artists(q: Optional[str] = Query(None), limit: int = Query(100, le=1000),
-                 followed_only: bool = Query(False)):
+                 followed_only: bool = Query(False),
+                 tag_source: Optional[str] = Query(None, pattern="^(manual)$")):
     """Artists ranked by how much of them Matthias has rated/loved. Powers the
-    Library's Artists browse view; the follow flag is the Phase 5 hook."""
+    Library's Artists browse view; the follow flag is the Phase 5 hook.
+    tag_source=manual ('Mine only') counts only manually-tagged or rated
+    tracks; artists with none of those drop out."""
     conditions, params = ["1=1"], []
     if q:
         conditions.append("LOWER(a.name) LIKE ?")
         params.append(f"%{q.lower()}%")
     if followed_only:
         conditions.append("a.followed = 1")
+    if tag_source == "manual":
+        conditions.append(_MINE_TRACK_COND)
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -1024,15 +1064,19 @@ def list_artists(q: Optional[str] = Query(None), limit: int = Query(100, le=1000
 
 @app.get("/api/labels")
 def list_labels(q: Optional[str] = Query(None), limit: int = Query(200, le=1000),
-                followed_only: bool = Query(False)):
+                followed_only: bool = Query(False),
+                tag_source: Optional[str] = Query(None, pattern="^(manual)$")):
     """Record labels ranked the same way. Sparse for now — labels accrue from
-    Discogs as tracks (re-)enrich; the ranking gets real as coverage grows."""
+    Discogs as tracks (re-)enrich; the ranking gets real as coverage grows.
+    tag_source=manual mirrors the Artists view's 'Mine only' restriction."""
     conditions, params = ["1=1"], []
     if q:
         conditions.append("LOWER(l.name) LIKE ?")
         params.append(f"%{q.lower()}%")
     if followed_only:
         conditions.append("l.followed = 1")
+    if tag_source == "manual":
+        conditions.append(_MINE_TRACK_COND)
     conn = get_connection()
     try:
         rows = conn.execute(

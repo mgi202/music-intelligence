@@ -18,8 +18,11 @@ const FACET_LAYERS = [
 ];
 
 // Name kept from the chip era — every tag-mutation path already calls this.
+// Under "Mine only" the facet options + counts cover hand-applied tags only,
+// so the rail's numbers always match what the filtered list would show.
 async function loadTagChips() {
-  try { state.allTags = await api("/api/tags"); } catch (e) { state.allTags = []; }
+  const p = state.mineOnly ? "?tag_source=manual" : "";
+  try { state.allTags = await api("/api/tags" + p); } catch (e) { state.allTags = []; }
   renderFacetRow(); renderSumBar();
 }
 
@@ -31,8 +34,27 @@ async function loadSourcePlaylists() {
 // Label facet options (2026-07-16). Cheap — labels are sparse until
 // re-enrichment fills them; the facet button hides while the list is empty.
 async function loadLabelsFacet() {
-  try { state.labelsList = (await api("/api/labels?limit=500")).labels || []; } catch (e) {}
+  const p = state.mineOnly ? "&tag_source=manual" : "";
+  try { state.labelsList = (await api("/api/labels?limit=500" + p)).labels || []; } catch (e) {}
   renderFacetRow();
+}
+
+// "Mine only" (2026-07-17): one toggle that re-scopes every other facet —
+// style chips then mean "tracks *I* put in this style", counts follow, and
+// the list restricts to manually-tagged or rated tracks. Facet options and
+// label counts are re-fetched so the rail never lies about the active scope.
+function toggleMineOnly() {
+  state.mineOnly = !state.mineOnly;
+  loadTagChips();
+  loadLabelsFacet();
+  loadTracks();          // dispatches to the entities view when active
+  renderFacetRow();
+}
+
+function mineBtnHtml() {
+  return `<button class="fbtn minebtn ${state.mineOnly ? "on" : ""}"
+    title="Only your own curation: tag facets match hand-applied tags, list restricts to manually-tagged or rated tracks"
+    onclick="toggleMineOnly()">👤 Mine only</button>`;
 }
 
 // Grand total for "showing X of Y" (changes only on ingest — fetched per visit).
@@ -77,7 +99,8 @@ function renderFacetRow() {
     : state.rating === "" ? "★ Rating"
     : (RATING_OPTS.find(o => o[0] === state.rating) || ["", "★ Rating"])[1];
   const pl = (state.sourcePlaylists || []).find(p => p.playlist_id === state.sourcePlaylist);
-  let html = facetBtnHtml("rating", ratingLabel, ratingOn);
+  let html = mineBtnHtml();
+  html += facetBtnHtml("rating", ratingLabel, ratingOn);
   for (const [layer, label] of FACET_LAYERS) {
     const items = by[layer] || [];
     if (!items.length) continue;   // e.g. no free-text tags → no "Other" button
@@ -260,7 +283,7 @@ function removeTagFilter(tg) {
 function libHasFilters() {
   return !!(state.q || state.tags.length || state.rating !== "" || state.untagged
             || state.sourcePlaylist || state.pendingVersions
-            || state.label || state.artist);
+            || state.label || state.artist || state.mineOnly);
 }
 
 function clearAllFilters() {
@@ -268,6 +291,7 @@ function clearAllFilters() {
   state.rating = ""; state.untagged = false; state.tags = [];
   state.sourcePlaylist = ""; state.pendingVersions = false;
   state.label = ""; state.artist = "";
+  if (state.mineOnly) { state.mineOnly = false; loadTagChips(); loadLabelsFacet(); }
   loadTracks(); renderFacetRow();
 }
 
@@ -277,6 +301,7 @@ function renderSumBar() {
   const pills = [];
   const pill = (label, js) =>
     `<span class="spill" onclick="${js}" title="remove this filter">${label} ×</span>`;
+  if (state.mineOnly) pills.push(pill("👤 mine only", "toggleMineOnly()"));
   state.tags.forEach(tg => pills.push(pill(esc(tg), `removeTagFilter('${esc(tg)}')`)));
   if (state.tags.length >= 2)
     pills.push(`<button class="modebtn2" title="match all vs any of the selected tags" onclick="toggleTagMode()">${state.tagMode.toUpperCase()}</button>`);

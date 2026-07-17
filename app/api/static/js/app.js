@@ -24,6 +24,10 @@ const state = {
   dismissed: false,
   // Artists & labels browse (2026-07-16): Library sub-view + entity filters.
   libView: "tracks", label: "", artist: "", labelsList: [], artistsList: [],
+  // "Mine only" (2026-07-17): tag facets match/count hand-applied tags only,
+  // and the list restricts to manually-tagged or rated tracks. Session state
+  // like the other filters — survives tab switches, resets on reload.
+  mineOnly: false,
 };
 
 const $ = (id) => document.getElementById(id);
