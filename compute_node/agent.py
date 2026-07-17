@@ -120,17 +120,36 @@ def die(msg: str) -> None:
 
 
 def api(path: str, payload: dict | None = None, method: str = "POST") -> dict:
+    """Server call with bounded retries on transient failures.
+
+    A multi-day session WILL see the server restart under it (first run
+    2026-07-17: a mid-deploy 502 killed the whole agent) — connection errors
+    and 5xx get exponential backoff, up to ~8.5 min total. 4xx stays fatal:
+    an auth or contract error must fail loudly, not loop.
+    """
     headers = {"X-Audio-Node-Token": TOKEN}
     url = f"{SERVER}{path}"
     # Server calls go via the tailnet proxy when configured; downloads never do.
     proxies = {"http": PROXY, "https": PROXY} if PROXY else None
-    if method == "GET":
-        r = requests.get(url, headers=headers, timeout=60, proxies=proxies)
-    else:
-        r = requests.post(url, json=payload, headers=headers, timeout=120,
-                          proxies=proxies)
-    r.raise_for_status()
-    return r.json()
+    delays = (5, 15, 30, 60, 120, 240)     # ~8.5 min of server downtime covered
+    for attempt, delay in enumerate((*delays, None)):
+        try:
+            if method == "GET":
+                r = requests.get(url, headers=headers, timeout=60,
+                                 proxies=proxies)
+            else:
+                r = requests.post(url, json=payload, headers=headers,
+                                  timeout=120, proxies=proxies)
+            if r.status_code >= 500 and delay is not None:
+                raise requests.ConnectionError(f"HTTP {r.status_code}")
+            r.raise_for_status()
+            return r.json()
+        except (requests.ConnectionError, requests.Timeout) as e:
+            if delay is None:
+                raise
+            print(f"  ~ server hiccup on {path} ({e}) — retry in {delay}s "
+                  f"[{attempt + 1}/{len(delays)}]")
+            time.sleep(delay)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
