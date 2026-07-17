@@ -171,19 +171,26 @@ def assemble(db_path: str | None = None, now_utc: datetime | None = None) -> tup
         pass
 
     # ── Audio pipeline (Phase 3 — only shown once something moved) ──
+    # datetime() on both sides: these tables' stamps default to SQLite's
+    # CURRENT_TIMESTAMP ("YYYY-MM-DD HH:MM:SS"), which sorts before the
+    # ISO "T"-separated window_start in a raw string comparison, silently
+    # zeroing every count.
     try:
         with db_conn(db_path) as conn:
             cands = conn.execute(
-                "SELECT COUNT(*) FROM audio_source_candidates WHERE created_at >= ?",
+                "SELECT COUNT(*) FROM audio_source_candidates "
+                "WHERE datetime(created_at) >= datetime(?)",
                 (window_start,),
             ).fetchone()[0]
             enriched = conn.execute(
-                "SELECT COUNT(*) FROM audio_features WHERE processed_at >= ?",
+                "SELECT COUNT(*) FROM audio_features "
+                "WHERE datetime(processed_at) >= datetime(?)",
                 (window_start,),
             ).fetchone()[0]
             auto = conn.execute(
                 "SELECT COUNT(*) FROM classification_results "
-                "WHERE created_at >= ? AND status = 'auto_applied'",
+                "WHERE datetime(created_at) >= datetime(?) "
+                "AND status = 'auto_applied'",
                 (window_start,),
             ).fetchone()[0]
             queued = conn.execute(

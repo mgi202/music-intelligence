@@ -123,6 +123,55 @@ def test_summary_counts_statuses_and_stall_alarm(db, monkeypatch):
     assert len(alerts) == 1 and "stalled" in alerts[0]
 
 
+def test_stall_alarm_suppressed_for_all_retry_pass(db, monkeypatch):
+    """A pass made up entirely of retry-cooldown tracks (already attempted,
+    zero-match) coming back zero-match again is routine cadence, not a stall
+    — no ntfy push (the ~10 overnight alerts of 16-17 Jul 2026)."""
+    _no_match_sources(monkeypatch)
+
+    alerts = []
+    from app import observability
+    monkeypatch.setattr(observability, "notify", lambda msg: alerts.append(msg) or True)
+
+    with db_conn(db) as conn:
+        for pk in ("r1", "r2"):
+            insert_track(conn, pk, match_status="metadata_only")
+            conn.execute(
+                "INSERT INTO enrichment_state (track_pk, updated_at, bandcamp_checked_at) "
+                "VALUES (?, ?, ?)",
+                (pk, iso_days_ago(10), iso_days_ago(10)),
+            )
+
+    summary = run_pipeline(limit=100, db_path=db)
+    assert summary["processed"] == 2
+    assert summary["no_match"] == 2
+    assert alerts == []
+
+
+def test_stall_alarm_fires_when_fresh_tracks_zero_match(db, monkeypatch):
+    """Retries mixed with never-attempted tracks: an all-zero-match pass is
+    still suspicious (fresh tracks should sometimes match) and alerts."""
+    _no_match_sources(monkeypatch)
+
+    alerts = []
+    from app import observability
+    monkeypatch.setattr(observability, "notify", lambda msg: alerts.append(msg) or True)
+
+    with db_conn(db) as conn:
+        insert_track(conn, "retry", match_status="metadata_only")
+        conn.execute(
+            "INSERT INTO enrichment_state (track_pk, updated_at, bandcamp_checked_at) "
+            "VALUES (?, ?, ?)",
+            ("retry", iso_days_ago(10), iso_days_ago(10)),
+        )
+        insert_track(conn, "fresh", match_status="metadata_only")
+
+    summary = run_pipeline(limit=100, db_path=db)
+    assert summary["processed"] == 2
+    assert summary["no_match"] == 2
+    assert len(alerts) == 1 and "stalled" in alerts[0]
+
+
 def test_no_stall_alarm_when_progress(db, monkeypatch):
     """If any track advances, the pass is not a stall."""
     _no_match_sources(monkeypatch)

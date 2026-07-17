@@ -88,7 +88,8 @@ def run_pipeline(
                 SELECT t.track_pk, t.canonical_title, t.canonical_artist,
                        t.normalized_title, t.normalized_artist,
                        t.isrc, t.duration_ms, t.musicbrainz_recording_id,
-                       t.bandcamp_url, t.release_date
+                       t.bandcamp_url, t.release_date,
+                       (es.bandcamp_checked_at IS NOT NULL) AS is_retry
                 FROM tracks t
                 LEFT JOIN enrichment_state es ON es.track_pk = t.track_pk
                 WHERE (t.match_status = 'metadata_only'
@@ -120,11 +121,16 @@ def run_pipeline(
         "metadata_only": "no_match",
     }
 
+    retries_attempted = 0
     for row in rows:
+        track = dict(row)
+        is_retry = bool(track.pop("is_retry", 0))
         try:
-            new_status = _enrich_track(dict(row), db_path)
+            new_status = _enrich_track(track, db_path)
             summary["processed"] += 1
             summary[_STATUS_KEY.get(new_status, "no_match")] += 1
+            if is_retry:
+                retries_attempted += 1
         except Exception as e:
             logger.error(f"Pipeline failed for {row['track_pk']}: {e}")
             _log_event(row["track_pk"], "pipeline", "error", str(e), db_path)
@@ -132,15 +138,25 @@ def run_pipeline(
 
     # Stall alarm: a busy pass where nothing advanced past metadata_only means
     # the batch is all zero-match tracks — invisible in per-pass stats otherwise.
+    # Exception: a pass made up entirely of retry-cooldown tracks (previously
+    # attempted, zero-match) is EXPECTED to come back all-zero-match when a
+    # wave of retries comes due — that's routine cadence, not a stall, and
+    # pushing it every pass all night is alert fatigue. Log it, don't notify.
     if summary["processed"] > 0 and summary["no_match"] == summary["processed"]:
-        msg = (f"Enrichment pass stalled: {summary['processed']} tracks attempted, "
-               f"0 advanced past metadata_only (all zero-match)")
-        logger.warning(msg)
-        try:
-            from app.observability import notify
-            notify(f"[music-intel] {msg}")
-        except Exception:  # noqa: BLE001 — alerting must never raise
-            pass
+        if retries_attempted == summary["processed"]:
+            logger.info(
+                f"Enrichment pass: {summary['processed']} zero-match retries "
+                f"attempted, none matched (expected on retry-cooldown waves; "
+                f"no alert)")
+        else:
+            msg = (f"Enrichment pass stalled: {summary['processed']} tracks attempted, "
+                   f"0 advanced past metadata_only (all zero-match)")
+            logger.warning(msg)
+            try:
+                from app.observability import notify
+                notify(f"[music-intel] {msg}")
+            except Exception:  # noqa: BLE001 — alerting must never raise
+                pass
 
     return summary
 

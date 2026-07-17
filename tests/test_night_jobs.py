@@ -383,6 +383,34 @@ class TestDigest:
         assert "Stage failures: 1 (Enrichment)" in message
         assert tags == "warning"
 
+    def test_audio_line_counts_space_format_timestamps(self, db):
+        """The audio tables stamp SQLite's CURRENT_TIMESTAMP
+        ("YYYY-MM-DD HH:MM:SS"), while window_start is an ISO string with a
+        "T" separator. In a raw string comparison the space sorts before "T",
+        so every same-night row was invisible and the Audio line never
+        appeared (17 Jul 2026: no Audio line despite 15,418 candidates)."""
+        from app.jobs import digest
+        now = utc(2026, 7, 4, 6, 30)
+        night_date = night.london_date(now)
+        with db_conn(db) as conn:
+            insert_track(conn, "pk1")
+            # Space-format stamp inside tonight's window (00:00 UTC 4 Jul →)
+            conn.execute(
+                "INSERT INTO audio_source_candidates "
+                "(track_pk, source_type, source_url, created_at) "
+                "VALUES ('pk1', 'official_preview', 'https://x', "
+                "'2026-07-04 04:19:21')")
+            # And one from before the window — must NOT be counted.
+            conn.execute(
+                "INSERT INTO audio_source_candidates "
+                "(track_pk, source_type, source_url, created_at) "
+                "VALUES ('pk1', 'official_preview', 'https://y', "
+                "'2026-07-03 22:00:00')")
+        runs.record_run("night_window", night_date, "ok",
+                        {"window_start": utc(2026, 7, 4, 0, 0).isoformat()}, db)
+        message, _ = digest.assemble(db, now)
+        assert "Audio: 1 sources found" in message
+
     def test_assembly_survives_broken_tables(self, db):
         from app.jobs import digest
         with db_conn(db) as conn:
