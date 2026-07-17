@@ -160,6 +160,86 @@ def test_queue_prioritises_under_trained_profile_over_recency(db):
     assert tracks[0]["suggestions"][0]["tag_name"] == "deep house"
 
 
+def _seed_profile_labels(c, pid, n_pos=15, n_neg=15, n_artists=3, prefix=None):
+    """Give a locked-vocab profile n_pos positive exemplars (cycling n_artists
+    distinct artists) and n_neg negatives. Exemplar tracks carry no public
+    tags, so they sit below any suggestion-bearing track in the queue."""
+    prefix = prefix or pid.replace(" ", "_")
+    for i in range(n_pos):
+        artist = f"{prefix}-artist-{i % n_artists}"
+        insert_track(c, f"{prefix}_pos{i}", canonical_artist=artist,
+                     normalized_artist=artist, ytm_track_id=f"{prefix}vp{i}")
+        c.execute(
+            "INSERT INTO reference_track_labels (track_pk, profile_id, label_type) "
+            "VALUES (?, ?, 'positive')", (f"{prefix}_pos{i}", pid))
+    for i in range(n_neg):
+        insert_track(c, f"{prefix}_neg{i}", canonical_artist=f"{prefix}-neg-{i}",
+                     normalized_artist=f"{prefix}-neg-{i}", ytm_track_id=f"{prefix}vn{i}")
+        c.execute(
+            "INSERT INTO reference_track_labels (track_pk, profile_id, label_type) "
+            "VALUES (?, ?, 'negative')", (f"{prefix}_neg{i}", pid))
+
+
+# ── Closing lens (2026-07-18): closest-to-ready outranks neediest ─────────────
+
+def test_closing_lens_nearly_ready_outranks_starved(db):
+    """A 14/15 profile's mapped track outranks a 3/15 profile's — the verdict
+    that arms a profile tonight beats one that merely chips at a deficit."""
+    from app.tags.verdict_queue import build_queue
+    with db_conn(db) as c:
+        _seed_profile_labels(c, "deep house", n_pos=14, n_neg=15)   # 1 remaining
+        _seed_profile_labels(c, "minimal", n_pos=3, n_neg=15)       # 12 remaining
+        insert_track(c, "closer", canonical_artist="Deepchord",
+                     normalized_artist="deepchord", ytm_track_id="v_c",
+                     created_at="2026-01-01T00:00:00Z")
+        _pub(c, "closer", "deep house", "lastfm", 0.5)
+        insert_track(c, "chipper", canonical_artist="Ricardo",
+                     normalized_artist="ricardo", ytm_track_id="v_n",
+                     created_at="2026-07-01T00:00:00Z")
+        _pub(c, "chipper", "minimal", "lastfm", 0.5)
+
+    pks = [t["pk"] for t in build_queue(db_path=db, limit=100)["tracks"]]
+    assert pks.index("closer") < pks.index("chipper")
+
+
+def test_closing_lens_artist_gate_only_new_artist_advances(db):
+    """15/15 met but only 2 distinct positive artists: a new-artist track takes
+    the top bonus; a same-artist track carrying the same tag contributes ~0."""
+    from app.tags.verdict_queue import build_queue
+    with db_conn(db) as c:
+        _seed_profile_labels(c, "electro", n_pos=15, n_neg=15, n_artists=2)
+        insert_track(c, "new_art", canonical_artist="Fresh",
+                     normalized_artist="fresh", ytm_track_id="v_new",
+                     created_at="2026-01-01T00:00:00Z")
+        _pub(c, "new_art", "electro", "lastfm", 0.5)
+        insert_track(c, "same_art", canonical_artist="electro-artist-0",
+                     normalized_artist="electro-artist-0", ytm_track_id="v_same",
+                     created_at="2026-07-01T00:00:00Z")
+        _pub(c, "same_art", "electro", "lastfm", 0.5)
+
+    pks = [t["pk"] for t in build_queue(db_path=db, limit=100)["tracks"]]
+    assert pks.index("new_art") < pks.index("same_art")
+
+
+def test_closing_lens_ready_profile_contributes_zero(db):
+    """A ready profile's mapped track scores 0 — it loses to a track mapping to
+    ANY non-ready profile, even a brand-new one."""
+    from app.tags.verdict_queue import build_queue
+    with db_conn(db) as c:
+        _seed_profile_labels(c, "trance", n_pos=15, n_neg=15, n_artists=3)  # ready
+        insert_track(c, "ready_map", canonical_artist="Armin",
+                     normalized_artist="armin", ytm_track_id="v_r",
+                     created_at="2026-07-01T00:00:00Z")
+        _pub(c, "ready_map", "trance", "lastfm", 0.9)
+        insert_track(c, "fresh_map", canonical_artist="Deepchord",
+                     normalized_artist="deepchord", ytm_track_id="v_f",
+                     created_at="2026-01-01T00:00:00Z")
+        _pub(c, "fresh_map", "deep house", "lastfm", 0.3)   # 0-example profile
+
+    pks = [t["pk"] for t in build_queue(db_path=db, limit=100)["tracks"]]
+    assert pks.index("fresh_map") < pks.index("ready_map")
+
+
 def test_queue_artist_diversity_cap(db):
     """No more than 2 consecutive tracks by the same artist."""
     from app.tags.verdict_queue import build_queue

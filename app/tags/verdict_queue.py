@@ -12,12 +12,25 @@ negatives/near-miss from ≥3 distinct artists). Each track ships with:
     locked vocab (they don't come from public tags), so they carry the session
     while enrichment coverage is still thin.
 
-Ordering (Stage 0, no vectors yet):
-  1. under-trained-profile priority — a track whose public tags map to profiles
-     far below their gate scores higher (weighted by the gate deficit);
-  2. artist diversity — the ≥3-distinct-artist gate is usually binding, so a
-     track bringing a NEW artist to a starved profile is boosted, and no more
-     than 2 consecutive tracks by the same artist are emitted;
+Ordering (training lens — CLOSING mode since 2026-07-18):
+  1. closest-to-ready priority — the kNN classifier went live (17 Jul 2026),
+     which flipped the economics: a verdict that arms a 14/15 profile buys a
+     whole nightly classification run for that tag, while +1 on a 3/15
+     profile buys nothing tonight. A track scores by the CLOSENESS of the
+     non-ready profiles its public tags map to (weight ∝ 1/(1 + remaining to
+     gate), plus a strong bonus inside the ≤3-remaining "one good session
+     arms it" band). A profile with zero examples still scores > 0 — new
+     profiles stay reachable, just no longer dominant — and ready profiles
+     contribute 0. The Training tab remains the tool for deliberately
+     working any single profile, including far-off ones. (The original
+     bootstrap ordering — neediest profile first, weighted by gate deficit —
+     served until the classifier went live.)
+  2. artist-gate targeting — when a profile meets its 15/15 counts but lacks
+     ≥3 distinct positive artists, ONLY a track bringing a new artist can
+     advance it: those tracks take the top bonus for that profile and
+     same-artist tracks contribute nothing to it. For other artist-starved
+     profiles a new-artist track keeps a small boost, and no more than 2
+     consecutive tracks by the same artist are emitted;
   3. tie-break — has public tags > none, then added_at DESC.
 
 Exclusions: verdict-committed (a commit is a completed judgement — the card
@@ -63,10 +76,16 @@ DEFAULT_SCAN_LIMIT = 1500
 # keeps a card with 20 mapped genres from sprawling — not the display cap.
 MAX_SUGGESTIONS = 12
 
-# The artist-diversity gate is usually the binding constraint, so weight the
-# "needs another artist" deficit heavily, and give a flat bonus to a track that
-# would bring a NOT-yet-represented artist to a profile still short on artists.
-_ARTIST_DEFICIT_WEIGHT = 5
+# Closing-lens weights (2026-07-18). Closeness ∝ 1/(1 + remaining-to-gate),
+# scaled so a fresh profile (remaining 33) still scores ~3 while a 1-remaining
+# profile scores 50; the band bonus makes "one good session arms it" profiles
+# (≤3 remaining) dominate; the gate-top bonus puts a new-artist track for an
+# artist-gate-bound profile above everything else, because nothing else can
+# arm that profile.
+_CLOSENESS_SCALE = 100.0
+_CLOSING_BAND_REMAINING = 3
+_CLOSING_BAND_BONUS = 150.0
+_ARTIST_GATE_TOP_BONUS = 250.0
 _NEW_ARTIST_BONUS = 10
 _MAX_CONSECUTIVE_SAME_ARTIST = 2
 
@@ -199,20 +218,27 @@ def build_queue(limit: int = 20, db_path: str | None = None,
     try:
         tag_index, profile_layer = _build_tag_index(conn)
 
-        # ── Per-profile readiness deficit + positive-exemplar artist sets ──
-        deficits: dict[str, int] = {}
+        # ── Per-profile closeness weight + positive-exemplar artist sets ──
+        closeness: dict[str, float] = {}
+        artist_bound: dict[str, bool] = {}   # 15/15 met, ≥3-artists leg binding
         needs_artists: dict[str, bool] = {}
         for pid in profile_layer:
             r = profile_readiness(pid, db_path=db_path)
             if r["ready"]:
-                deficits[pid] = 0
+                closeness[pid] = 0.0
+                artist_bound[pid] = False
                 needs_artists[pid] = False
-            else:
-                deficits[pid] = (
-                    r["needs_positive"] + r["needs_negative_or_near_miss"]
-                    + r["needs_artists"] * _ARTIST_DEFICIT_WEIGHT
-                )
-                needs_artists[pid] = r["needs_artists"] > 0
+                continue
+            remaining = (r["needs_positive"] + r["needs_negative_or_near_miss"]
+                         + r["needs_artists"])
+            weight = _CLOSENESS_SCALE / (1 + remaining)
+            if remaining <= _CLOSING_BAND_REMAINING:
+                weight += _CLOSING_BAND_BONUS
+            closeness[pid] = weight
+            artist_bound[pid] = (r["enough_positive"]
+                                 and r["enough_negative_or_near_miss"]
+                                 and not r["enough_artists"])
+            needs_artists[pid] = r["needs_artists"] > 0
 
         positive_artists: dict[str, set[str]] = {}
         for row in conn.execute(
@@ -346,13 +372,21 @@ def build_queue(limit: int = 20, db_path: str | None = None,
                         continue
                     prof_support.setdefault(pid, []).append(tt)
 
-            base_score = 0
-            artist_bonus = 0
+            base_score = 0.0
+            artist_bonus = 0.0
             suggestions = []
             for pid, supp in prof_support.items():
-                base_score += deficits.get(pid, 0)
-                if needs_artists.get(pid) and artist_key not in positive_artists.get(pid, set()):
-                    artist_bonus += _NEW_ARTIST_BONUS
+                new_artist = artist_key not in positive_artists.get(pid, set())
+                if artist_bound.get(pid):
+                    # Counts met, artists binding: only a NEW artist can
+                    # advance this profile — same-artist tracks add nothing.
+                    if new_artist:
+                        base_score += closeness.get(pid, 0.0)
+                        artist_bonus += _ARTIST_GATE_TOP_BONUS
+                else:
+                    base_score += closeness.get(pid, 0.0)
+                    if needs_artists.get(pid) and new_artist:
+                        artist_bonus += _NEW_ARTIST_BONUS
 
                 tag_name = profile_name.get(pid, pid)
                 prior = artist_tag_prior.get((artist_key, _norm(tag_name)), 0)
