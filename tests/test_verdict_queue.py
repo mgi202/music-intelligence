@@ -240,6 +240,59 @@ def test_closing_lens_ready_profile_contributes_zero(db):
     assert pks.index("fresh_map") < pks.index("ready_map")
 
 
+def test_closing_lens_skips_profiles_track_already_teaches(db):
+    """The 'I Luv Your Girl' resurface (2026-07-17): a reviewed-but-uncommitted
+    track (rated + manually tagged → positive exemplar + sticky rejects) must
+    NOT be boosted by the very profiles its own labels made look close to gate
+    — it can't advance them. An unlabelled track with the same public tags
+    outranks it."""
+    from app.tags.verdict_queue import build_queue
+    with db_conn(db) as c:
+        # 13 seeded positives + 'reviewed' itself = 14/15 → still 1 short, so
+        # the profile stays near-gate (high closeness) for OTHER tracks.
+        _seed_profile_labels(c, "deep house", n_pos=13, n_neg=15)
+        # Reviewed track: same public tag, but already the profile's positive
+        # exemplar (its manual tag derived the label). Rating alone doesn't
+        # retire it (by design).
+        insert_track(c, "reviewed", canonical_artist="The-Dream",
+                     normalized_artist="the-dream", ytm_track_id="v_rev",
+                     created_at="2026-07-01T00:00:00Z", personal_rating=3)
+        _pub(c, "reviewed", "deep house", "lastfm", 0.9)
+        c.execute("INSERT INTO reference_track_labels (track_pk, profile_id, "
+                  "label_type, created_by) VALUES ('reviewed', 'deep house', "
+                  "'positive', 'auto:tag')")
+        # Fresh track, weaker evidence, older — must still win.
+        insert_track(c, "unseen", canonical_artist="Deepchord",
+                     normalized_artist="deepchord", ytm_track_id="v_un",
+                     created_at="2026-01-01T00:00:00Z")
+        _pub(c, "unseen", "deep house", "lastfm", 0.3)
+
+    tracks = build_queue(db_path=db, limit=100)["tracks"]
+    pks = [t["pk"] for t in tracks]
+    assert pks.index("unseen") < pks.index("reviewed")
+    # And the labelled profile is no longer offered back as a suggestion chip.
+    reviewed = next(t for t in tracks if t["pk"] == "reviewed")
+    assert all(s["profile_id"] != "deep house" for s in reviewed["suggestions"])
+
+
+def test_rejected_suggestion_never_reoffered(db):
+    """A verdict-reject leaves a sticky near_miss — if the track ever re-serves,
+    that chip must not come back."""
+    from app.tags.verdict_queue import build_queue
+    from app.tags.reference_manager import reject_suggestion
+    with db_conn(db) as c:
+        _seed_profile_labels(c, "deep house", n_pos=5, n_neg=5)
+        insert_track(c, "t1", canonical_artist="The-Dream",
+                     normalized_artist="the-dream", ytm_track_id="v1")
+        _pub(c, "t1", "deep house", "lastfm", 0.9)
+
+    before = next(t for t in build_queue(db_path=db)["tracks"] if t["pk"] == "t1")
+    assert any(s["profile_id"] == "deep house" for s in before["suggestions"])
+    reject_suggestion("t1", "deep house", db_path=db)
+    after = next(t for t in build_queue(db_path=db)["tracks"] if t["pk"] == "t1")
+    assert all(s["profile_id"] != "deep house" for s in after["suggestions"])
+
+
 def test_queue_artist_diversity_cap(db):
     """No more than 2 consecutive tracks by the same artist."""
     from app.tags.verdict_queue import build_queue

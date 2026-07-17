@@ -324,6 +324,22 @@ def build_queue(limit: int = 20, db_path: str | None = None,
                 {"playlist_id": row["playlist_id"], "playlist_name": row["playlist_name"]}
             )
 
+        # Profiles each candidate already teaches (positive exemplar via manual
+        # tag, sticky verdict-reject near-miss, veto — ANY reference label).
+        # Serving that card cannot advance those profiles by even one, and
+        # re-suggesting a rejected tag is wrong — so those profiles are skipped
+        # for BOTH the closeness score and the suggestion chips. Without this,
+        # the closing lens resurfaced already-reviewed (rated + tagged but
+        # never committed) tracks at the TOP: their own labels made their
+        # profiles look close to gate (found 2026-07-17, "I Luv Your Girl").
+        labelled: dict[str, set[str]] = {pk: set() for pk in pks}
+        for row in conn.execute(
+            f"""SELECT track_pk, profile_id FROM reference_track_labels
+                WHERE track_pk IN ({placeholders})""",
+            pks,
+        ).fetchall():
+            labelled[row["track_pk"]].add(row["profile_id"])
+
         # Same-artist manual-tag prior: {(artist_key, normalized tag_name): count}.
         artist_tag_prior: dict[tuple[str, str], int] = {}
         for row in conn.execute(
@@ -369,6 +385,8 @@ def build_queue(limit: int = 20, db_path: str | None = None,
             for tt in public_tags[pk]:
                 for pid in tag_index.get(_norm(tt["tag"]), set()):
                     if profile_layer.get(pid) == "era":
+                        continue
+                    if pid in labelled[pk]:   # already labelled — see above
                         continue
                     prof_support.setdefault(pid, []).append(tt)
 
