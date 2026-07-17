@@ -5,7 +5,34 @@
 # First run builds the image (~30–60 min: it bakes in torch, the Essentia TF
 # models and the 1.9 GB CLAP checkpoint) — later runs start in seconds.
 # Config lives in compute_node/.env (copy .env.example). See README.md.
+#
+# TWO services (2026-07-17): tailscaled must run NATIVE arm64 — the amd64
+# tailscaled inside the compute image fails under Rosetta (its Go AVX2 crypto
+# miscomputes → "chacha20poly1305: message authentication failed" on the Noise
+# handshake, control plane unreachable). The sidecar joins the tailnet and
+# exposes a SOCKS5 proxy; the compute container sends ONLY server API calls
+# through it (MIS_PROXY) — downloads stay direct on the home connection.
 services:
+  tailscale:
+    image: tailscale/tailscale:stable
+    platform: linux/arm64               # native — do NOT run this under Rosetta
+    env_file:
+      - .env                            # TS_AUTHKEY
+    environment:
+      TS_USERSPACE: "true"
+      TS_HOSTNAME: mis-compute-node
+      TS_SOCKS5_SERVER: ":1055"
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_ACCEPT_DNS: "false"
+    volumes:
+      - tailscale-state:/var/lib/tailscale   # keeps the tailnet identity across runs
+    healthcheck:
+      test: ["CMD", "tailscale", "status"]   # non-zero until logged in
+      interval: 5s
+      timeout: 5s
+      retries: 24                            # up to ~2 min for first registration
+    restart: unless-stopped
+
   compute-node:
     build:
       context: ..                       # repo root (requirements-compute.txt)
@@ -14,12 +41,16 @@ services:
     platform: linux/amd64               # no aarch64 essentia-tensorflow wheels;
                                         # runs under Rosetta on Apple Silicon
     env_file:
-      - .env                            # MIS_SERVER, AUDIO_NODE_TOKEN, TS_AUTHKEY
+      - .env                            # MIS_SERVER, AUDIO_NODE_TOKEN
     environment:
+      TS_AUTHKEY: ""                    # override .env: tailscaled runs in the
+                                        # sidecar, never in this (Rosetta) container
+      MIS_PROXY: socks5h://tailscale:1055
       MIS_BATCH: ${MIS_BATCH:-4}
       MIS_REPROCESS: ${MIS_REPROCESS:-0}
-    volumes:
-      - tailscale-state:/var/lib/tailscale   # keeps the tailnet identity across runs
+    depends_on:
+      tailscale:
+        condition: service_healthy
 
 volumes:
   tailscale-state:

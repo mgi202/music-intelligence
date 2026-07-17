@@ -30,10 +30,14 @@ RUN git clone --depth 1 --branch 2.2.8 \
          -DBUILD_TESTING=OFF \
     && cmake --build /src/libkeyfinder/build --parallel \
     && cmake --install /src/libkeyfinder/build
+# keyfinder-cli switched from a Makefile to CMake upstream (found 2026-07-17,
+# first real build) — same deps (libav* + pkg-config), already in this stage.
 RUN git clone --depth 1 \
         https://github.com/evanpurkhiser/keyfinder-cli.git /src/keyfinder-cli \
-    && make -C /src/keyfinder-cli \
-    && make -C /src/keyfinder-cli install PREFIX=/usr/local
+    && cmake -S /src/keyfinder-cli -B /src/keyfinder-cli/build \
+         -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build /src/keyfinder-cli/build --parallel \
+    && cmake --install /src/keyfinder-cli/build
 
 # ── Stage 2: runtime ─────────────────────────────────────────────────────────
 FROM --platform=linux/amd64 python:3.11-slim-bookworm
@@ -89,16 +93,27 @@ RUN set -e; mkdir -p /models/essentia; cd /models/essentia; \
       classification-heads/emomusic/emomusic-msd-musicnn-2 \
     ; do \
       echo "fetching $f"; \
-      curl -fsSL --retry 5 --retry-delay 5 -O "$base/$f.pb"; \
-      curl -fsSL --retry 5 --retry-delay 5 -O "$base/$f.json"; \
+      curl -fsSL --retry 8 --retry-delay 10 --retry-all-errors \
+           --connect-timeout 30 -O "$base/$f.pb"; \
+      curl -fsSL --retry 8 --retry-delay 10 --retry-all-errors \
+           --connect-timeout 30 -O "$base/$f.json"; \
     done
+    # --retry-all-errors: essentia.upf.edu intermittently drops connections
+    # (empty reply / stalls, seen 2026-07-17); plain --retry skips those.
 
 # CLAP fused checkpoint (~1.9 GB) — baked in so the container never downloads
 # at runtime. agent.py loads it from $MIS_MODELS_DIR/clap/.
 RUN mkdir -p /models/clap \
-    && curl -fsSL --retry 5 --retry-delay 10 \
+    && curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors \
         -o /models/clap/630k-audioset-fusion-best.pt \
         https://huggingface.co/lukewys/laion_clap/resolve/main/630k-audioset-fusion-best.pt
+
+# torchvision: not used directly, but laion_clap imports it transitively
+# (clap_module.utils → torchvision.ops.misc) — found at first build 2026-07-17.
+# 0.18.1 is the matched release for torch 2.3.1. Deliberately a late layer so
+# fixing it didn't invalidate the cached model/CLAP download layers above.
+RUN pip install --no-cache-dir torchvision==0.18.1 \
+        --index-url https://download.pytorch.org/whl/cpu
 
 # ── Build-time verification (acceptance criterion 1) ─────────────────────────
 # import essentia.standard AND the TensorflowPredict* algorithms must resolve,
