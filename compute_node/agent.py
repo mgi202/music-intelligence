@@ -131,8 +131,16 @@ def api(path: str, payload: dict | None = None, method: str = "POST") -> dict:
     url = f"{SERVER}{path}"
     # Server calls go via the tailnet proxy when configured; downloads never do.
     proxies = {"http": PROXY, "https": PROXY} if PROXY else None
-    delays = (5, 15, 30, 60, 120, 240)     # ~8.5 min of server downtime covered
-    for attempt, delay in enumerate((*delays, None)):
+    # Connection-class failures (no HTTP response: Mac asleep→rebind, home
+    # line drop, server reboot) retry FOREVER, capped at 300s — an unattended
+    # multi-day agent gains nothing by dying while the path is down (18 Jul:
+    # two outages burned to the last rung of the finite ladder). HTTP 5xx
+    # retries through the ladder only, then raises — a persistent 5xx can be
+    # per-payload (server-side bug on one track) and must not wedge the run.
+    # 4xx stays immediately fatal (auth/contract errors fail loudly).
+    delays = (5, 15, 30, 60, 120, 240)
+    attempt = 0
+    while True:
         try:
             if method == "GET":
                 r = requests.get(url, headers=headers, timeout=60,
@@ -140,15 +148,20 @@ def api(path: str, payload: dict | None = None, method: str = "POST") -> dict:
             else:
                 r = requests.post(url, json=payload, headers=headers,
                                   timeout=120, proxies=proxies)
-            if r.status_code >= 500 and delay is not None:
-                raise requests.ConnectionError(f"HTTP {r.status_code}")
+            if r.status_code >= 500 and attempt < len(delays):
+                delay = delays[attempt]
+                attempt += 1
+                print(f"  ~ server error on {path} (HTTP {r.status_code}) — "
+                      f"retry in {delay}s [{attempt}/{len(delays)}]")
+                time.sleep(delay)
+                continue
             r.raise_for_status()
             return r.json()
         except (requests.ConnectionError, requests.Timeout) as e:
-            if delay is None:
-                raise
-            print(f"  ~ server hiccup on {path} ({e}) — retry in {delay}s "
-                  f"[{attempt + 1}/{len(delays)}]")
+            delay = delays[attempt] if attempt < len(delays) else 300
+            attempt += 1
+            print(f"  ~ server unreachable on {path} ({e}) — retry in "
+                  f"{delay}s [{attempt}]")
             time.sleep(delay)
 
 
