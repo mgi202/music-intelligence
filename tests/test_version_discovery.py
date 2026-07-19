@@ -311,3 +311,37 @@ def test_list_and_pending_filter(db, monkeypatch):
     assert tracks["nopend"]["pending_version_count"] == 0
     filtered = cl.get("/api/tracks?pending_versions=true").json()["tracks"]
     assert [t["track_pk"] for t in filtered] == ["withpend"]
+
+
+# ── Pending-per-track cap (2026-07-19) ────────────────────────────────────────
+
+def test_pending_cap_demotes_overflow_lowest_confidence_first(db):
+    """Nightly re-sweeps accumulate candidates forever (the deepest track hit
+    42 pending rows by 19 Jul) — _cap_pending keeps the top-10 by confidence
+    per (track, kind), demotes the rest to superseded, and leaves other kinds
+    and non-pending statuses untouched."""
+    from app.db.connection import db_conn
+    from app.enrichment.version_discovery import _cap_pending
+    _seed_track(db)
+    with db_conn(db) as c:
+        for i in range(14):
+            c.execute(
+                "INSERT INTO playback_version_candidates "
+                "(track_pk, video_id, kind, status, confidence) "
+                "VALUES ('t1', ?, 'audio', 'pending', ?)", (f"v{i:02d}", i / 100))
+        c.execute("INSERT INTO playback_version_candidates "
+                  "(track_pk, video_id, kind, status, confidence) "
+                  "VALUES ('t1', 'vx', 'extended', 'pending', 0.01)")
+        c.execute("INSERT INTO playback_version_candidates "
+                  "(track_pk, video_id, kind, status, confidence) "
+                  "VALUES ('t1', 'vr', 'audio', 'rejected', 0.99)")
+        demoted = _cap_pending(c, "t1", "audio")
+
+    assert demoted == 4
+    rows = _candidates(db)
+    pend = [r for r in rows if r["kind"] == "audio" and r["status"] == "pending"]
+    assert len(pend) == 10
+    assert {r["video_id"] for r in rows if r["status"] == "superseded"} \
+        == {"v00", "v01", "v02", "v03"}          # lowest confidence demoted
+    assert any(r["video_id"] == "vx" and r["status"] == "pending" for r in rows)
+    assert any(r["video_id"] == "vr" and r["status"] == "rejected" for r in rows)

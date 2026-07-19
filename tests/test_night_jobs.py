@@ -411,6 +411,21 @@ class TestDigest:
         message, _ = digest.assemble(db, now)
         assert "Audio: 1 sources found" in message
 
+    def test_pending_versions_counts_tracks_not_rows(self, db):
+        """The digest's queue line reports DISTINCT tracks (the real review
+        workload) with raw candidate rows in brackets — rows alone overstated
+        the queue ~8× (2026-07-19 audit: 1,961 rows over 247 tracks)."""
+        from app.jobs import digest
+        with db_conn(db) as conn:
+            insert_track(conn, "pk1")
+            for i in range(3):
+                conn.execute(
+                    "INSERT INTO playback_version_candidates "
+                    "(track_pk, video_id, status) VALUES ('pk1', ?, 'pending')",
+                    (f"v{i}",))
+        message, _ = digest.assemble(db, utc(2026, 7, 4, 6, 30))
+        assert "Pending versions: 1 tracks (3 candidates)" in message
+
     def test_assembly_survives_broken_tables(self, db):
         from app.jobs import digest
         with db_conn(db) as conn:

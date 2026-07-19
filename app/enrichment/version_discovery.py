@@ -68,6 +68,13 @@ _DURATION_RAMP_TO_FRAC = 0.50  # duration_score hits 1.0 at +50 % length
 # Below this, a candidate is noise — don't even store it.
 _DISCARD_BELOW_CONFIDENCE = 0.60
 
+# Per-(track, kind) ceiling on PENDING candidates. Nightly re-sweeps keep
+# surfacing fresh videoIds (YTM search churn), so without a cap a stuck track
+# accumulates forever — by 19 Jul the deepest track carried 42 pending rows,
+# which helps nobody judging it. Overflow is demoted to 'superseded' (kept
+# for audit, never deleted), lowest confidence first.
+_MAX_PENDING_PER_TRACK_KIND = int(os.getenv("VERSION_MAX_PENDING_PER_TRACK", "10"))
+
 # Auto-apply strict gates (all must hold, on top of the confidence threshold).
 _GATE_TITLE_SIM = 0.90
 _GATE_ARTIST_SIM = 0.90
@@ -519,6 +526,24 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _cap_pending(conn, track_pk: str, kind: str) -> int:
+    """Enforce _MAX_PENDING_PER_TRACK_KIND for one (track, kind): keep the
+    top-N pending rows by confidence, demote the rest to 'superseded'.
+    Ties break toward newer rows (higher candidate_id). Returns demoted count."""
+    cur = conn.execute(
+        """UPDATE playback_version_candidates
+           SET status = 'superseded', updated_at = ?
+           WHERE track_pk = ? AND kind = ? AND status = 'pending'
+             AND candidate_id NOT IN (
+                 SELECT candidate_id FROM playback_version_candidates
+                 WHERE track_pk = ? AND kind = ? AND status = 'pending'
+                 ORDER BY confidence DESC, candidate_id DESC
+                 LIMIT ?)""",
+        (_now(), track_pk, kind, track_pk, kind, _MAX_PENDING_PER_TRACK_KIND),
+    )
+    return cur.rowcount
+
+
 def _load_track(conn, track_pk: str) -> dict | None:
     row = conn.execute(
         """SELECT track_pk, canonical_title, canonical_artist, normalized_title,
@@ -664,6 +689,7 @@ def _run_discovery(track_pk: str, force: bool, db_path: str | None) -> dict:
             _apply(conn, best, "auto_applied")
             auto_applied = 1
 
+        _cap_pending(conn, track_pk, "extended")
         candidates = _ranked_candidates(conn, track_pk)
 
     return {"candidates": candidates, "discarded": discarded, "auto_applied": auto_applied}
@@ -755,6 +781,7 @@ def _run_video_discovery(track_pk: str, force: bool, db_path: str | None,
             _apply(conn, best, "auto_applied")
             auto_applied = 1
 
+        _cap_pending(conn, track_pk, "video")
         candidates = _ranked_candidates(conn, track_pk, kind="video")
 
     return {"candidates": candidates, "discarded": discarded, "auto_applied": auto_applied}
@@ -1186,6 +1213,7 @@ def _run_audio_discovery(track_pk: str, force: bool, db_path: str | None,
             applied_video = res["video_id"]
             auto_applied = 1
 
+        _cap_pending(conn, track_pk, "audio")
         candidates = _ranked_candidates(conn, track_pk, kind="audio")
 
     return {"candidates": candidates, "discarded": discarded,

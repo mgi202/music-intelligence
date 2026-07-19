@@ -75,9 +75,12 @@ def assemble(db_path: str | None = None, now_utc: datetime | None = None) -> tup
                 "SELECT COUNT(*) FROM tracks WHERE datetime(created_at) >= datetime(?)",
                 (day_ago,),
             ).fetchone()[0]
-            versions = conn.execute(
-                "SELECT COUNT(*) FROM playback_version_candidates WHERE status = 'pending'"
-            ).fetchone()[0]
+            # Distinct tracks is the real review workload — raw rows overstated
+            # it ~8× (each track stores several candidates; 2026-07-19 audit).
+            v_tracks, v_rows = conn.execute(
+                "SELECT COUNT(DISTINCT track_pk), COUNT(*) "
+                "FROM playback_version_candidates WHERE status = 'pending'"
+            ).fetchone()
             dedup = conn.execute(
                 "SELECT COUNT(*) FROM dedup_review WHERE status = 'pending'"
             ).fetchone()[0]
@@ -90,7 +93,8 @@ def assemble(db_path: str | None = None, now_utc: datetime | None = None) -> tup
         except Exception:  # noqa: BLE001
             verdict = "?"
         lines.append(f"Inbox 24h: {inbox} · Verdict eligible: {verdict}")
-        lines.append(f"Pending versions: {versions} · Dedup review: {dedup}")
+        lines.append(f"Pending versions: {v_tracks} tracks ({v_rows} candidates) "
+                     f"· Dedup review: {dedup}")
     except Exception:  # noqa: BLE001
         logger.exception("digest: queue line failed")
         lines.append("Queues: ?")
