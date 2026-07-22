@@ -277,6 +277,23 @@ def build_candidates(profile_id: str, limit: int = 30,
             c.pop("artist_key", None)
             if c["track_pk"] in unsure_set:
                 c["provenance"] = "classifier_unsure"
+            c["playlists"] = []
+        # Provenance chips — where each candidate earned its library place.
+        cand_pks = [c["track_pk"] for c in out]
+        if cand_pks:
+            ph = ",".join("?" * len(cand_pks))
+            members: dict[str, list[dict]] = {}
+            for m in conn.execute(
+                f"""SELECT track_pk, playlist_id, playlist_name
+                    FROM track_playlist_membership
+                    WHERE track_pk IN ({ph})
+                    ORDER BY playlist_name COLLATE NOCASE""",
+                cand_pks,
+            ).fetchall():
+                members.setdefault(m["track_pk"], []).append(
+                    {"playlist_id": m["playlist_id"], "playlist_name": m["playlist_name"]})
+            for c in out:
+                c["playlists"] = members.get(c["track_pk"], [])
         return {"profile_id": profile_id, "tag_name": prof["tag_name"],
                 "candidates": out}
     finally:

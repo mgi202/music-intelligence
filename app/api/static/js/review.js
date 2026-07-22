@@ -62,6 +62,7 @@ async function trainProfile(pid) {
         <div style="flex:1;min-width:180px">
           <div class="title">${esc(t.canonical_title)}${t.tag_match ? ' <span class="pill wip" title="its existing tags already point at this profile">tag match</span>' : ""}${t.provenance === "classifier_unsure" ? ' <span class="pill wip" title="the nightly classifier scored this near its decision threshold — your verdict here teaches it the most">classifier unsure</span>' : ""}</div>
           <div class="artist">${esc(t.canonical_artist)}${t.personal_rating ? " · " + "★".repeat(t.personal_rating) : ""}</div>
+          ${(t.playlists || []).length ? `<div class="artist" title="source playlists this track lives in">in: ${t.playlists.map(p => esc(p.playlist_name)).join(" · ")}</div>` : ""}
         </div>
         <span style="display:flex;gap:6px">
           <button class="primary" title="a clean example of ${esc(pid)}" onclick="trainLabel('${jsarg(t.track_pk)}', '${jsarg(pid)}', 'positive')">✓ Yes</button>

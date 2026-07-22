@@ -552,7 +552,24 @@ def list_review_queue(limit: int = 100, db_path: str | None = None) -> list[dict
                 d["evidence"] = json.loads(d.pop("evidence_json") or "{}")
             except (TypeError, ValueError):
                 d["evidence"] = {}
+            d["playlists"] = []
             out.append(d)
+        # Provenance chips — where each track earned its library place.
+        pks = list({d["track_pk"] for d in out})
+        if pks:
+            ph = ",".join("?" * len(pks))
+            members: dict[str, list[dict]] = {}
+            for m in conn.execute(
+                f"""SELECT track_pk, playlist_id, playlist_name
+                    FROM track_playlist_membership
+                    WHERE track_pk IN ({ph})
+                    ORDER BY playlist_name COLLATE NOCASE""",
+                pks,
+            ).fetchall():
+                members.setdefault(m["track_pk"], []).append(
+                    {"playlist_id": m["playlist_id"], "playlist_name": m["playlist_name"]})
+            for d in out:
+                d["playlists"] = members.get(d["track_pk"], [])
         return out
     finally:
         conn.close()

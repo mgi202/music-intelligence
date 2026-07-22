@@ -88,6 +88,7 @@ function renderClassifications() {
         return `<div class="pl" id="cls-${r.id}">
           <div class="name">${esc(r.canonical_title)} <span class="sub">${esc(r.canonical_artist)}</span></div>
           <div class="sub">sounds like <b style="color:#6fb6d6">${esc(r.tag)}</b> · confidence ${Math.round(r.confidence * 100)}%</div>
+          ${(r.playlists || []).length ? `<div class="sub" title="source playlists this track lives in">in: ${r.playlists.map(p => esc(p.playlist_name)).join(" · ")}</div>` : ""}
           <details style="margin:6px 0"><summary class="sub" style="cursor:pointer">Why?</summary>
             <div style="max-width:360px;margin-top:6px">
               ${sigbar("Similar reference tracks", s.knn_similarity_score)}
