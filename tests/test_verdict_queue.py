@@ -113,9 +113,10 @@ def test_reconcile_seeds_locked_vocab_counts(db):
     finally:
         conn.close()
     counts = {r["taxonomy_layer"]: r["n"] for r in rows}
-    # 66 total. Family 16 / subgenre 30 since 2026-07-06: bass-lineage promoted
-    # to family + "bass" dropped, then the Latin family and its 9 subgenres added.
-    assert counts == {"functional": 8, "personal": 7, "family": 16,
+    # 67 total. Family 16 / subgenre 30 since 2026-07-06: bass-lineage promoted
+    # to family + "bass" dropped, then the Latin family and its 9 subgenres
+    # added; functional 9 since 2026-07-22 (sunset-sunrise).
+    assert counts == {"functional": 9, "personal": 7, "family": 16,
                       "subgenre": 30, "era": 5}
 
 

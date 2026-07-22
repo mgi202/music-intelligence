@@ -87,7 +87,7 @@ class TestLaterAutoReturn:
 # ── R2: profile sort_order — set order, never alphabetical ──────────────────
 
 SET_ORDER = ["warm-up", "groover", "peak-time", "anthem", "afterhours",
-             "closer", "transition-tool", "breather"]
+             "closer", "transition-tool", "breather", "sunset-sunrise"]
 PERSONAL_ORDER = ["gym", "drive", "focus-work", "pre-night-out", "wind-down",
                   "deep-listen", "host"]
 

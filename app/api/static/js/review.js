@@ -104,7 +104,7 @@ async function trainLabel(pk, pid, labelType) {
 // panel and a this-session log. A card retires on commit, dismiss, or skip —
 // never on rating alone.
 
-const VQ_FKEYS = ["q", "w", "e", "r", "t", "y", "u", "i"];   // functional chips, set order
+const VQ_FKEYS = ["q", "w", "e", "r", "t", "y", "u", "i", "o"];  // functional chips, set order
 // Personal chips, display order. k/l cover user-added profiles (vocab
 // manager); chips beyond the key run render without a hotkey (mouse/tap).
 const VQ_PKEYS = ["a", "s", "d", "f", "g", "h", "j", "k", "l"];
@@ -782,7 +782,7 @@ function vqTickClock() {
 
 // Keyboard (R3): full coverage — chips included. Review view only; never while
 // typing or with a modal open.
-//   q w e r t y u i = functional chips (set order) · a s d f g h j k l = personal
+//   q w e r t y u i o = functional chips (set order) · a s d f g h j k l = personal
 //   7 8 9 0 - = era chips (70s/80s/90s/00s/modern — the number-row run)
 //   z/x/c/v = 1–4★ · 1/2/3 accept · ⇧1/2/3 reject · n = not for me · m = later
 //   b = reveal (guess-first) · space = play/pause · ⏎ = commit

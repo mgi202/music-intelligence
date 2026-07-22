@@ -421,13 +421,14 @@ def test_api_reference_profiles_vocabulary(client, db):
     from app.playlists.utility import seed_starter_tag_profiles
     seed_starter_tag_profiles(db)
     rows = client.get("/api/reference/profiles").json()["profiles"]
-    # Locked vocab: 66 (56 at lock + pop rap, then the Latin family + 9 subgenres).
-    assert len(rows) == 66
+    # Locked vocab: 67 (56 at lock + pop rap, the Latin family + 9 subgenres,
+    # then sunset-sunrise 2026-07-22).
+    assert len(rows) == 67
     layers = [r["taxonomy_layer"] for r in rows]
     assert layers == sorted(layers)  # ordered by layer for grouping
     from collections import Counter
     # Family 16 / subgenre 30 since 2026-07-06 (bass-lineage promoted, Latin added).
-    assert Counter(layers) == {"functional": 8, "personal": 7, "family": 16,
+    assert Counter(layers) == {"functional": 9, "personal": 7, "family": 16,
                                "subgenre": 30, "era": 5}
     assert all({"profile_id", "tag_name", "taxonomy_layer", "description"} <= r.keys() for r in rows)
 

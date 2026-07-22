@@ -264,7 +264,10 @@ def seed_example_rules(
 # the Review card's prefill but must never surface as suggestion chips.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# functional (8) + personal (7) + family (16) + subgenre (30) + era (5) = 66.
+# functional (9) + personal (7) + family (16) + subgenre (30) + era (5) = 67.
+# 2026-07-22: functional grew to 9 — sunset-sunrise added (day/night transition
+# slot; hotkey "o" in the Review card, appended so existing hotkeys keep their
+# muscle memory).
 LOCKED_TAG_PROFILES: list[dict] = [
     # ── Functional — a track's job in a set arc ──
     {"profile_id": "warm-up", "sort_order": 0, "tag_name": "warm-up", "taxonomy_layer": "functional",
@@ -298,6 +301,11 @@ LOCKED_TAG_PROFILES: list[dict] = [
      "description": "Recognisable, emotional, hands-in-air. About memorability, where "
                     "peak-time is about intensity. Can co-exist with peak-time.",
      "context_terms": ["anthemic", "hands in the air"]},
+    {"profile_id": "sunset-sunrise", "sort_order": 8, "tag_name": "sunset-sunrise", "taxonomy_layer": "functional",
+     "description": "The day/night hinge. Atmospheric, highly emotive — warm melodies "
+                    "over deep, uplifting rhythm, mirroring the sky at golden hour. "
+                    "Open-air sundown slot or the sunrise moment after a long night.",
+     "context_terms": ["sunset", "sunrise", "golden hour", "sundown"]},
 
     # ── Personal — a concrete recurring listening moment ──
     {"profile_id": "gym", "sort_order": 0, "tag_name": "gym", "taxonomy_layer": "personal",

@@ -45,11 +45,12 @@ def test_locked_profile_budget_is_55(db):
         }
     finally:
         conn.close()
-    # 66 total: 56 (lock + pop rap) + the Latin family and its 9 subgenres
-    # (2026-07-06). Family 16 / subgenre 30: the bass-music lineage is family-
-    # layer (old "bass" umbrella dissolved) and Latin was added from a scan.
-    assert n == 66
-    assert layers == {"functional": 8, "personal": 7, "family": 16,
+    # 67 total: 56 (lock + pop rap) + the Latin family and its 9 subgenres
+    # (2026-07-06) + sunset-sunrise (functional, 2026-07-22). Family 16 /
+    # subgenre 30: the bass-music lineage is family-layer (old "bass" umbrella
+    # dissolved) and Latin was added from a scan.
+    assert n == 67
+    assert layers == {"functional": 9, "personal": 7, "family": 16,
                       "subgenre": 30, "era": 5}
 
 
@@ -149,7 +150,7 @@ def test_era_check_migration_rebuilds_legacy_table_preserving_labels(db):
         assert conn.execute(
             "SELECT COUNT(*) FROM tag_profiles WHERE taxonomy_layer='era'"
         ).fetchone()[0] == 5
-        assert conn.execute("SELECT COUNT(*) FROM tag_profiles").fetchone()[0] == 66
+        assert conn.execute("SELECT COUNT(*) FROM tag_profiles").fetchone()[0] == 67
     finally:
         conn.close()
 

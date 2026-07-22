@@ -69,6 +69,13 @@ PROFILE_PROMPTS: dict[str, tuple] = {
         "downtempo moment, tension release",
         "relentless peak time pounding techno, maximum energy",
         None, None, 0.10, 0.50, None, None),
+    "sunset-sunrise": (
+        "warm atmospheric sunset electronic music, golden hour open air set, "
+        "emotive uplifting melodies, deep melodic rhythm, glowing horizon "
+        "atmosphere",
+        "dark aggressive peak time banger, dry percussive dj tool, harsh "
+        "industrial warehouse techno",
+        100, 124, 0.35, 0.70, 0.50, 1.00),
 
     # ── Families (electronic first — the underground classification targets) ──
     "techno": (

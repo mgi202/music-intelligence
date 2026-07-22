@@ -62,6 +62,9 @@ _OPPOSING_PROFILES_DECL: dict[str, tuple[str, ...]] = {
     "peak-time": ("warm-up", "breather", "afterhours"),
     "anthem": ("breather", "afterhours"),
     "closer": ("peak-time", "warm-up"),
+    # sunset-sunrise is warm/emotive/melodic — clean contrast against maximum
+    # intensity, dry utility, and the dark-druggy afterhours palette.
+    "sunset-sunrise": ("peak-time", "transition-tool", "afterhours"),
     # ── personal (listening moment) ──
     "gym": ("wind-down", "deep-listen", "focus-work"),
     "pre-night-out": ("wind-down", "focus-work"),
