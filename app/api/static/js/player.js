@@ -232,6 +232,14 @@ async function updateHeroMeta(pk) {
   try {
     const t = await api(`/api/tracks/${pk}`);
     if (currentPlayingPk() !== pk) return;   // user skipped while we fetched
+    // Heal the now-playing label from canonical data: callers and queues
+    // restored from localStorage may carry title-only or stale labels.
+    if (t.canonical_artist && t.canonical_title) {
+      const item = state.queue[state.qIndex];
+      if (item && item.pk === pk) item.label = `${t.canonical_artist} — ${t.canonical_title}`;
+      const b = $("np").querySelector("b");
+      if (b) b.textContent = `${t.canonical_artist} — ${t.canonical_title}`;
+    }
     $("pb-stars").innerHTML = starButtons(t);
     const tags = (t.tags || []).map(g =>
       `<span class="tag ${g.tag_type === "private_manual" ? "manual" : "auto"}">${esc(g.tag)}</span>`).join("");
