@@ -98,7 +98,7 @@ function renderClassifications() {
               ${sigbar("Context agreement", s.context_alignment_score)}
             </div></details>
           <div class="actions">
-            ${vid ? `<button onclick="play('${jsarg(vid)}', '${jsarg(r.canonical_title)}', '${jsarg(r.track_pk)}')">▶ Listen</button>` : ""}
+            ${vid ? `<button onclick="play('${jsarg(vid)}', '${jsarg(`${r.canonical_artist} — ${r.canonical_title}`)}', '${jsarg(r.track_pk)}')">▶ Listen</button>` : ""}
             <button class="primary" onclick="decideClassification(${r.id}, 'accept')">✓ It is ${esc(r.tag)}</button>
             <button onclick="decideClassification(${r.id}, 'reject')">✕ It isn't</button>
           </div>

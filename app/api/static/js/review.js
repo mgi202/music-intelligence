@@ -58,7 +58,7 @@ async function trainProfile(pid) {
     const vid = t.playback_video_id || t.ytm_track_id;
     return `<div class="pl trainrow" id="tr-${cssId(t.track_pk)}">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        ${vid ? `<button onclick="play('${jsarg(vid)}', '${jsarg(t.canonical_title)}', '${jsarg(t.track_pk)}')">▶</button>` : ""}
+        ${vid ? `<button onclick="play('${jsarg(vid)}', '${jsarg(`${t.canonical_artist} — ${t.canonical_title}`)}', '${jsarg(t.track_pk)}')">▶</button>` : ""}
         <div style="flex:1;min-width:180px">
           <div class="title">${esc(t.canonical_title)}${t.tag_match ? ' <span class="pill wip" title="its existing tags already point at this profile">tag match</span>' : ""}${t.provenance === "classifier_unsure" ? ' <span class="pill wip" title="the nightly classifier scored this near its decision threshold — your verdict here teaches it the most">classifier unsure</span>' : ""}</div>
           <div class="artist">${esc(t.canonical_artist)}${t.personal_rating ? " · " + "★".repeat(t.personal_rating) : ""}</div>
