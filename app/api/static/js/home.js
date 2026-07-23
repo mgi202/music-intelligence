@@ -35,7 +35,10 @@ function renderTree() {
     return `<div class="treeitem ${active ? "active" : ""}" onclick="selectPlaylistByIdx(${i})">
       <button class="pinbtn ${p.pinned ? "pinned" : ""}" onclick="event.stopPropagation();togglePinByIdx(${i})"
         title="${p.pinned ? "unpin from top" : "pin to top"}"><i class="ti ti-pin"></i></button>
-      <span class="tname">${esc(p.playlist_name)}</span><span class="cnt">${p.n}</span>
+      <span class="tname">${esc(p.playlist_name)}</span>
+      <button class="pinbtn" onclick="event.stopPropagation();flightPackByIdx(${i})"
+        title="Flight pack — download this playlist as an offline review file"><i class="ti ti-plane-departure"></i></button>
+      <span class="cnt">${p.n}</span>
     </div>`;
   }).join("") || '<div class="empty">No playlists ingested yet.</div>';
   const more = $("treemore");
@@ -53,6 +56,11 @@ function toggleTreeMore() { state.treeExpanded = !state.treeExpanded; renderTree
 function selectPlaylistByIdx(i) {
   const p = (state.plTree || [])[i];
   if (p) selectNode({ type: "playlist", id: p.playlist_id, name: p.playlist_name });
+}
+function flightPackByIdx(i) {
+  // Content-Disposition: attachment → navigating downloads without leaving the app.
+  const p = (state.plTree || [])[i];
+  if (p) window.location.href = `/api/flight-pack?playlist_id=${encodeURIComponent(p.playlist_id)}`;
 }
 async function togglePinByIdx(i) {
   const p = (state.plTree || [])[i];

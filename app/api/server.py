@@ -21,8 +21,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -32,6 +33,18 @@ from app.tags import tag_manager
 from app.playlists.compiler import compile_playlist
 
 app = FastAPI(title="Music Intelligence System", version="0.1.0")
+
+# Flight packs (offline review files) run from file:// where the browser sends
+# Origin: null — without CORS their sync fetches are blocked. Wildcard is
+# acceptable here because the API is reachable only inside the tailnet (no
+# public exposure, no auth, no cookies — allow_credentials stays False).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["*"],
+)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -1150,6 +1163,22 @@ def list_source_playlists():
         return [dict(r) for r in rows]
     finally:
         conn.close()
+
+
+@app.get("/api/flight-pack")
+def flight_pack(request: Request, playlist_id: str = Query(...)):
+    """One self-contained HTML file for reviewing a source playlist offline
+    (rate + tag from file:// with no network, sync later). See flight_pack.py."""
+    from app.api.flight_pack import build_flight_pack
+    result = build_flight_pack(playlist_id, str(request.base_url))
+    if result is None:
+        raise HTTPException(404, "No tracks for that playlist_id")
+    filename, page = result
+    return Response(
+        content=page,
+        media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.put("/api/source-playlists/{playlist_id}/pin")
