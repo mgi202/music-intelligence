@@ -96,6 +96,16 @@ def test_pack_is_fully_self_contained(db):
     assert text.count("<html") == 1
 
 
+def test_pack_api_base_honours_forwarded_proto(db):
+    """Behind tailscale serve (HTTPS → localhost:8080) the baked sync URL must
+    be https, not the plain-http scheme uvicorn sees."""
+    _seed(db)
+    data = _pack_data(_client().get(
+        "/api/flight-pack?playlist_id=PL1",
+        headers={"X-Forwarded-Proto": "https"}))
+    assert data["api_base"] == "https://testserver"
+
+
 def test_pack_unknown_playlist_404(db):
     assert _client().get("/api/flight-pack?playlist_id=NOPE").status_code == 404
 

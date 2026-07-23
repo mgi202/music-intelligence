@@ -1170,7 +1170,14 @@ def flight_pack(request: Request, playlist_id: str = Query(...)):
     """One self-contained HTML file for reviewing a source playlist offline
     (rate + tag from file:// with no network, sync later). See flight_pack.py."""
     from app.api.flight_pack import build_flight_pack
-    result = build_flight_pack(playlist_id, str(request.base_url))
+    # Behind tailscale serve the app is HTTPS but uvicorn sees plain http —
+    # honour the proxy's X-Forwarded-Proto or the baked sync URL points at
+    # http://…ts.net (port 80), which tailscale doesn't serve.
+    api_base = str(request.base_url).rstrip("/")
+    if (request.headers.get("x-forwarded-proto") == "https"
+            and api_base.startswith("http://")):
+        api_base = "https://" + api_base[len("http://"):]
+    result = build_flight_pack(playlist_id, api_base)
     if result is None:
         raise HTTPException(404, "No tracks for that playlist_id")
     filename, page = result
